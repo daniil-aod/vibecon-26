@@ -30,7 +30,7 @@ from storage import put_object, APP_NAME
 
 DEMO_FLEET_ID = "demo-dockclock-fleet"
 DEMO_OWNER_EMAIL = "abdowns4@gmail.com"
-DEMO_VERSION = 1  # bump to force a rebuild on next startup when features change
+DEMO_VERSION = 2  # bump to force a rebuild on next startup when features change
 PREVIEW_URL = "https://detention-pay.preview.emergentagent.com"
 
 # collections that hold demo-fleet-scoped data (everything keyed by fleet_id)
@@ -131,8 +131,9 @@ def make_ratecon_pdf(load_number, broker, carrier, stops, det) -> bytes:
     return buf.getvalue()
 
 
-def make_bol_png(load_number, facility, driver, shipper, consignee) -> bytes:
+def make_bol_png(load_number, facility, driver, shipper, consignee, when=None) -> bytes:
     """A signed bill-of-lading photo (clean synthetic scan)."""
+    when = when or now_utc()
     W, H = 900, 1160
     img = Image.new("RGB", (W, H), (247, 246, 242))
     d = ImageDraw.Draw(img)
@@ -147,7 +148,7 @@ def make_bol_png(load_number, facility, driver, shipper, consignee) -> bytes:
 
     text(70, 70, "STRAIGHT BILL OF LADING - SHORT FORM", bold=True)
     text(70, 95, f"Load / Pro No.: {load_number}")
-    text(600, 95, f"Date: {now_utc().strftime('%m/%d/%Y')}")
+    text(600, 95, f"Date: {when.strftime('%m/%d/%Y')}")
     d.line([70, 125, W - 70, 125], fill=(200, 200, 200), width=1)
 
     text(70, 150, "Ship From (Shipper):", bold=True)
@@ -168,7 +169,7 @@ def make_bol_png(load_number, facility, driver, shipper, consignee) -> bytes:
 
     d.rectangle([70, 470, W - 70, 470], outline=(200, 200, 200))
     text(70, 500, "Arrival stamp (guard shack):", bold=True)
-    text(90, 525, f"IN: {now_utc().strftime('%m/%d/%Y')}  recorded at dock")
+    text(90, 525, f"IN: {when.strftime('%m/%d/%Y')}  recorded at dock")
     text(90, 550, "OUT: see DockClock geofence record")
 
     text(70, 620, "Received in good condition except as noted:", bold=True)
@@ -307,12 +308,12 @@ class _Seeder:
         self.payments = []
         self.invoice_seq = 1000
 
-    async def _store(self, data, content_type, ext, kind, extra=None):
+    async def _store(self, data, content_type, ext, kind, extra=None, created_at=None):
         path = f"{APP_NAME}/{self.fid}/{kind}/{_uid()}.{ext}"
         res = await asyncio.to_thread(put_object, path, data, content_type)
         rec = {"id": _uid(), "fleet_id": self.fid, "storage_path": res["path"], "content_type": content_type,
                "size": res.get("size", len(data)), "sha256": hashlib.sha256(data).hexdigest(), "kind": kind,
-               "is_deleted": False, "created_at": iso(now_utc()), **(extra or {})}
+               "is_deleted": False, "created_at": iso(created_at) if created_at else iso(now_utc()), **(extra or {})}
         self.files.append(rec)
         return rec
 
@@ -357,10 +358,15 @@ class _Seeder:
             stop["events"].append({"type": "departure", "at": iso(departed), "source": src, "coords": coords})
         return stop, fac
 
-    async def _add_bol(self, stop, load_number, driver_name, shipper, consignee):
-        png = make_bol_png(load_number, stop["facility_name"], driver_name, shipper, consignee)
+    async def _add_bol(self, stop, load_number, driver_name, shipper, consignee, uploaded_at=None):
+        # A driver photographs the signed BOL at the dock on their way out, so stamp it
+        # near this stop's departure — not at seed time.
+        if uploaded_at is None:
+            dep = core.parse(stop.get("departed_at"))
+            uploaded_at = (dep + timedelta(minutes=1)) if dep else now_utc()
+        png = make_bol_png(load_number, stop["facility_name"], driver_name, shipper, consignee, when=uploaded_at)
         rec = await self._store(png, "image/png", "png", "bol",
-                                {"load_id": None, "stop_id": stop["id"]})
+                                {"load_id": None, "stop_id": stop["id"]}, created_at=uploaded_at)
         stop["bol"].append({"file_id": rec["id"], "sha256": rec["sha256"], "uploaded_at": rec["created_at"],
                             "content_type": "image/png"})
         stop["events"].append({"type": "bol_uploaded", "at": rec["created_at"]})
