@@ -1,0 +1,8 @@
+crons:
+  - name: dockclock-tick
+    description: "Every 15 min: send due broker notices, build invoices, run payment reminders and the Monday summary"
+    cron: "*/15 * * * *"
+    endpoint: "{{BASE_URL}}/api/cron/tick"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true
