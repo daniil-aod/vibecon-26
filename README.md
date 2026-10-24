@@ -5,7 +5,7 @@
 > tested, how everything is wired, the demo fleet, known gotchas, and what to do next.
 > Companion docs: `backend/DEMO.md` (demo fleet), `memory/PRD.md` (roadmap), `design_guidelines.md` (UI).
 
-Preview URL: **https://detention-pay.preview.emergentagent.com**
+Preview URL: **https://load-locator-4.preview.emergentagent.com**
 
 ---
 
@@ -292,7 +292,26 @@ Current `DEMO_VERSION = 2`.
 
 ---
 
-## 12. Driver page location-permission behavior (`pages/Driver.js`)
+## 12. Driver side = DockClock Driver mobile app (`/app/frontend`, Expo)
+
+**Repo layout changed:** the React web app now lives in `/app/web` (owner/dispatcher dashboard). `/app/frontend`
+is the Expo driver app. `web/src/pages/Driver.js` now just forwards old `/d/:token` links to `/api/open/:token`.
+
+- **Texted link** = `{app_url}/api/open/{driver_token}` (backend HTML page, `templates.driver_open_page`). It opens
+  `dockclock://d/{tok}?api={origin}` (Android uses an `intent://` URL). If the app isn't installed, it shows the
+  install steps; set `DRIVER_APP_IOS_URL` / `DRIVER_APP_ANDROID_URL` in backend env to show the store buttons.
+- **App flow:** `app/d/[token].tsx` has the same UI as the old web page. The driver taps **Start trip** once. The app
+  asks for location (precise), then explains and asks for "Always" (background). Tracking runs through
+  `src/lib/tracking.ts`: `expo-location` background updates (BestForNavigation; Android foreground service; iOS
+  background mode) and posts `/api/driver/{tok}/ping` every 20s or 25 m moved. It stops automatically when every
+  stop has departed. Without background permission, or in Expo Go/web, it falls back to on-screen tracking.
+- **Precise location:** on iOS, if the driver picked Approximate, the app shows Apple's temporary precise prompt
+  (`expo-location/next`, `locationFullAccuracyPermission`). On Android it re-asks for fine location. If the driver
+  still says no, a card links to Settings.
+- **Which backend:** the `api` origin from the link is accepted only if it's the app's own `EXPO_PUBLIC_BACKEND_URL`
+  host or is listed in `EXPO_PUBLIC_EXTRA_API_HOSTS`. Add the production web app's domain there.
+- Manual "I'm at the dock / I'm leaving" taps and the BOL photo (camera or gallery, `expo-image-picker`) remain.
+  The map is OSM/Leaflet in a WebView.
 
 The public driver page watches GPS and throttles pings (every 20s or 25m moved). Recent fix: when the
 phone **blocks** location, it shows a **prominent amber card** (`data-testid="driver-location-blocked"`)

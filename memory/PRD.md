@@ -31,3 +31,12 @@ ELD integrations, factoring portal, detention-adjusted rate suggestion, Spanish 
 
 ## Guided demo fleet (see backend/DEMO.md)
 End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads covering rate-con AI extraction, live meter, broker notices, sealed/verified evidence, card payment, reminders, cap-hit dispute, scorecards. Version-gated by DEMO_VERSION (bump + restart rebuilds it; POST /api/demo/reseed forces it). Must be kept in sync as new features ship.
+
+
+
+## 2026-06 — DockClock Driver mobile app (Expo, /app/frontend)
+- Original ask: replace the driver web page with a mobile app with the same UI. The owner texts a link that opens the app, the driver presses Start, and nothing else is needed until delivery. Real precise GPS (iOS Precise Location / Android fine), background tracking, pings same as web (20s / 25 m), send to the existing backend, install page if the app is missing.
+- Web app moved to /app/web; web /d/:token now forwards to backend /api/open/:token (landing page that opens the app or shows install steps).
+- Built: home (resume trip / paste link), /d/[token] driver screen (Start trip, geofence auto-stamps, manual taps, BOL camera/gallery, OSM map WebView), background location task with Android foreground service, precise-location prompts, permission cards with Open Settings.
+- Tested: iteration_4 — 13/13 backend, all frontend web flows pass.
+- Backlog: P0 publish + native build to verify background/precise on real phones; set DRIVER_APP_IOS_URL / DRIVER_APP_ANDROID_URL; add the production web domain to EXPO_PUBLIC_EXTRA_API_HOSTS. P1 Twilio real SMS (pending); Spanish driver UI. P2 offline ping queue.

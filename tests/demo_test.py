@@ -2,7 +2,7 @@
 import sys
 import requests
 
-BASE_URL = "https://detention-pay.preview.emergentagent.com/api"
+BASE_URL = "https://load-locator-4.preview.emergentagent.com/api"
 
 class Colors:
     GREEN = '\033[92m'

@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "DockClock Driver",
+    "slug": "dockclock-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "dockclock",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Auto-stamp your dock arrival and departure times",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Keep stamping dock times while your phone is locked",
+        "NSCameraUsageDescription": "Photograph the signed BOL for your load",
+        "NSPhotoLibraryUsageDescription": "Attach a BOL photo from your gallery",
+        "UIBackgroundModes": ["location", "fetch"]
+      }
+    },
+    "android": {
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "CAMERA"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Auto-stamp your dock arrival and departure times",
+          "locationAlwaysAndWhenInUsePermission": "Keep stamping dock times while your phone is locked",
+          "locationFullAccuracyPermission": "Precise location stamps your exact dock times",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Photograph the signed BOL for your load",
+          "photosPermission": "Attach a BOL photo from your gallery"
+        }
+      ],
+      "@react-native-vector-icons/lucide"
+    ]
+  }
+}

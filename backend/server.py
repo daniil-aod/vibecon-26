@@ -7,6 +7,8 @@ import asyncio
 import hashlib
 import logging
 import secrets
+import mimetypes
+from urllib.parse import quote
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -17,7 +19,7 @@ import requests
 import stripe
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, UploadFile, File, BackgroundTasks
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
@@ -505,7 +507,7 @@ def stops_with_billing(load: dict) -> list:
 async def load_view(load: dict, fleet: dict, full: bool = False) -> dict:
     invoices = await db.invoices.find({"load_id": load["id"]}, {"_id": 0}).to_list(50)
     v = {**load, "stops": stops_with_billing(load), "status": load_status(load, invoices),
-         "invoices": invoices, "driver_url": f"{fleet.get('app_url') or ''}/d/{load['driver_token']}"}
+         "invoices": invoices, "driver_url": f"{fleet.get('app_url') or ''}/api/open/{load['driver_token']}"}
     v["detention_total"] = round(sum(s["billing"]["amount"] for s in v["stops"]), 2)
     if full:
         v["notices"] = await db.notices.find({"load_id": load["id"]}, {"_id": 0}).sort("created_at", 1).to_list(100)
@@ -571,10 +573,11 @@ async def text_driver(load_id: str, m: dict = Depends(fleet_member)):
         raise HTTPException(status_code=400, detail="Add the driver's phone number first")
     if not fleet.get("app_url"):
         raise HTTPException(status_code=400, detail="App address unknown yet; reload the page and try again")
-    url = f"{fleet['app_url']}/d/{load['driver_token']}"
+    url = f"{fleet['app_url']}/api/open/{load['driver_token']}"
     first = load["stops"][0] if load.get("stops") else {}
-    body = (f"{fleet['name']} via DockClock: Hi {drv.get('name') or 'driver'}, your check-in link for load "
-            f"{load['load_number']} ({first.get('facility_name') or ''}): {url} Open it at the dock and keep it open.")
+    body = (f"{fleet['name']} via DockClock: Hi {drv.get('name') or 'driver'}, your load "
+            f"{load['load_number']} ({first.get('facility_name') or ''}) is ready: {url} "
+            f"Tap to open it in the DockClock Driver app, then press Start trip.")
     res = await send_sms(drv["phone"], body)
     entry = {"at": iso(now_utc()), "to": drv["phone"], "by": m["user_id"], **res}
     await db.loads.update_one({"id": load_id}, {"$push": {"sms_log": entry}})
@@ -828,6 +831,23 @@ def driver_payload(load, fleet):
                          "notice_sent_at": s["notice"].get("sent_at")} for s in stops]}
 
 
+@api.get("/open/{tok}", response_class=HTMLResponse)
+async def driver_open(tok: str, request: Request):
+    """Texted link target: opens the DockClock Driver mobile app, or explains how to install it."""
+    load = await db.loads.find_one({"driver_token": tok}, {"_id": 0, "load_number": 1, "driver": 1})
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    origin = f"https://{host}" if host else ""
+    deep = f"dockclock://d/{tok}?api={quote(origin, safe='')}"
+    intent = f"intent://d/{tok}?api={quote(origin, safe='')}#Intent;scheme=dockclock;end"
+    ios_url = os.environ.get("DRIVER_APP_IOS_URL", "")
+    android_url = os.environ.get("DRIVER_APP_ANDROID_URL", "")
+    return HTMLResponse(templates.driver_open_page(
+        valid=bool(load), load_number=(load or {}).get("load_number") or "",
+        driver_name=((load or {}).get("driver") or {}).get("name") or "",
+        deep_link=deep, intent_link=intent, ios_url=ios_url, android_url=android_url),
+        status_code=200 if load else 404)
+
+
 @api.get("/driver/{tok}")
 async def driver_get(tok: str):
     load = await load_by_driver_token(tok)
@@ -915,6 +935,9 @@ async def driver_bol(tok: str, stop_id: str, file: UploadFile = File(...)):
         raise HTTPException(status_code=404, detail="Stop not found")
     data = await file.read()
     ct = file.content_type or ""
+    if not ct.startswith("image/"):
+        # Native uploads may arrive as application/octet-stream; infer from the filename.
+        ct = mimetypes.guess_type(file.filename or "")[0] or ct
     if not ct.startswith("image/"):
         raise HTTPException(status_code=400, detail="Please upload a photo")
     if len(data) > 12 * 1024 * 1024:

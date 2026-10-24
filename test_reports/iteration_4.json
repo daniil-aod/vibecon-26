@@ -1,0 +1,44 @@
+{
+  "summary": "DockClock Driver Expo app + backend driver endpoints tested. Backend 13/13 pytest pass (open landing page valid/invalid, GET driver, ping far/no-event, geofence arrival via ping, tap arrive/depart incl. 400 guards, BOL octet-stream+bol.jpg accepted via mimetype inference, non-image rejected, 422 on bad body). Frontend (390x844 web preview, Playwright geolocation): home title/input/open button, invalid input error, https://host/api/open/<tok> and raw token both navigate to /d/<tok>; on-site RL-55018 shows load number, gps chip, start card, facility, on-site timer, stop row, I'm leaving, BOL button; completed APX-30277 shows driver-all-done; invalid token shows driver-link-error. Start trip -> foreground watch, chip 'GPS on · ±10 m · precise · keep the app open', pings reached backend, moving to stop coords triggered geofence arrival (arrived_source=geofence) and UI switched to on-site timer. Manual arrive/depart taps work (driver_tap). Trip resume after reload of '/' redirects to active load. Ping throttle verified (20s or 25m cumulative; big move pings immediately). Web BOL upload via file chooser works (count 1). /api/open page renders open-app-button with dockclock:// deep link, install steps, pending notice; invalid shows open-invalid. FOUND & FIXED 1 bug: Uncaught Error overlay 'The wake lock with tag dockclock has not activated yet' when load delivered (stopTracking called un-awaited deactivateKeepAwake inside try/catch -> unhandled promise rejection). No deprecated Expo packages (expo-av/barcode-scanner/background-fetch) found. Native-only items (background task, precise prompt, camera, map) not testable on web.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/open/{tok}", "issue": "Invalid token returns HTTP 200 (open-invalid HTML). Acceptable for UX, but 404 status would be more accurate."},
+      {"endpoint": "GET /api/open/{tok}", "issue": "Install steps say 'using the button below' even when no DRIVER_APP_IOS_URL/ANDROID_URL is set (only the pending notice shows). Copy should adapt when store URLs are missing."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "tracking.stopTracking", "issue": "FIXED: deactivateKeepAwake() returns a rejecting Promise when wake lock wasn't active; sync try/catch didn't catch it -> red 'Uncaught Error' overlay after final departure tap. Now awaited. Reference: /app/frontend/src/lib/tracking.ts:135", "testID": "driver-departed-button", "priority": "HIGH (fixed)"}
+    ],
+    "integration_issues": [
+      {"flow": "Manual tap completion while another load's trip is active", "issue": "tap() calls stopTracking('delivered') whenever this load's stops are all departed, without checking the active trip token. If the driver is tracking load A and taps through load B, A's tracking is stopped and the trip cleared. Guard with (await getTrip())?.token === token. Reference: /app/frontend/app/d/[token].tsx:142", "affected_testIDs": ["driver-departed-button"]},
+      {"flow": "Start trip on a second load", "issue": "startTracking silently replaces an existing trip for a different load (no warning). Consider confirming or auto-stopping only if previous load is delivered. Reference: /app/frontend/src/lib/tracking.ts:108", "affected_testIDs": ["driver-start-button"]}
+    ],
+    "design_issues": [
+      {"screen": "/d/[token]", "issues": ["Toast renders over the header (covers logo/load number) for ~3s after taps; minor."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_driver_app.py", "/app/test_reports/pytest/pytest_driver_app.xml"],
+  "action_items": [
+    "Guard stopTracking in tap() so it only stops the trip belonging to the current token ([token].tsx:142).",
+    "Optional: warn before Start trip replaces an active trip for another load.",
+    "Optional: /api/open install copy when no store URLs configured; consider 404 status for invalid token.",
+    "Native build verification needed: background location task (TaskManager), expo-location/next FULL accuracy prompt on iOS, Android fine-location re-ask, camera BOL upload via expo/fetch on file:// URIs (backend now accepts octet-stream + bol.jpg).",
+    "Security note: resolveApi trusts any *.emergentagent.com / *.emergent.host host from the link's api param; a crafted link could send driver GPS to another app on those domains. Consider exact-host allowlist only."
+  ],
+  "critical_code_review_comments": [
+    "tracking.ts:135 un-awaited async call inside try/catch (fixed).",
+    "[token].tsx:142 stopTracking without token check (see integration_issues).",
+    "[token].tsx is 432 lines - ok. No raw HTML elements; all text wrapped in Text; testIDs present on interactive elements.",
+    "server.py driver_url (/loads/{id}) and SMS (/loads/{id}/sms) now build {app_url}/api/open/{token} (lines 510, 576) - correct per code review (Clerk auth not tested)."
+  ],
+  "updated_files": ["/app/frontend/src/lib/tracking.ts", "/app/backend/tests/test_driver_app.py"],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% of requested flows after fix (1 bug fixed, 1 integration edge-case reported)"},
+  "seed_data_creation": "No reseed. Tests clone RL-55018 into temporary TEST_ loads (id prefix TEST_, unarrived stop) directly in mongo and delete them (plus pings/invoices/files) afterwards. Demo loads unchanged.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_driver_app.py (pytest.ini forces -n 2 loadscope; use -n0 for serial). Fixture clones RL-55018 (token b8dbdcc3...) - if demo is reseeded update ON_SITE_TOKEN/COMPLETED_TOKEN. For UI geofence tests use page.context.grant_permissions(['geolocation']) + set_geolocation; stop coords 34.049,-117.435 radius 300m. Frontend backend URL env key is EXPO_PUBLIC_BACKEND_URL.",
+  "rca_of_issue": "Uncaught 'wake lock with tag dockclock has not activated yet': expo-keep-awake deactivateKeepAwake is async and on web throws ERR_KEEP_AWAKE_TAG_INVALID when the tag isn't active (e.g. manual-tap delivery without Start, or after reload where activation didn't happen). The call was not awaited, so try/catch didn't catch the rejection -> dev error overlay. Fix: await it inside try. Verified: full arrive->depart->all-done flow produced no pageerror."
+}

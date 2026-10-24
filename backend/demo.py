@@ -31,7 +31,7 @@ from storage import put_object, APP_NAME
 DEMO_FLEET_ID = "demo-dockclock-fleet"
 DEMO_OWNER_EMAIL = "abdowns4@gmail.com"
 DEMO_VERSION = 2  # bump to force a rebuild on next startup when features change
-PREVIEW_URL = "https://detention-pay.preview.emergentagent.com"
+PREVIEW_URL = "https://load-locator-4.preview.emergentagent.com"
 
 # collections that hold demo-fleet-scoped data (everything keyed by fleet_id)
 _SCOPED = ["loads", "invoices", "notices", "pings", "facilities", "brokers",
