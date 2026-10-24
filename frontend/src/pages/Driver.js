@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { MapPin, LogIn, LogOut, Camera, CheckCircle2, Navigation, Loader2, AlertTriangle, Satellite } from "lucide-react";
+import { MapPin, LogIn, LogOut, Camera, CheckCircle2, Navigation, Loader2, AlertTriangle, Satellite, LocateFixed, Lock } from "lucide-react";
 import { publicApi, errMsg } from "@/lib/api";
 import { clock, fmtClock, hrs } from "@/lib/format";
 import { FacilityMap } from "@/components/Maps";
@@ -21,23 +21,39 @@ export default function Driver() {
   const [err, setErr] = useState(null);
   const [pos, setPos] = useState(null);
   const [gpsErr, setGpsErr] = useState(null);
+  const [gpsBlocked, setGpsBlocked] = useState(false);
   const [busy, setBusy] = useState("");
   const lastSent = useRef({ t: 0, lat: null, lng: null });
+  const watchId = useRef(null);
   const fileRef = useRef();
   const now = useNow(1000);
 
   const load = useCallback(() => publicApi.get(`/driver/${token}`).then((r) => setD(r.data)).catch((e) => setErr(errMsg(e, "This link is not valid"))), [token]);
   useEffect(() => { load(); }, [load]);
 
-  // GPS watch + throttled pings (every 20s or 25m moved)
+  const onFix = useCallback((p) => { setGpsBlocked(false); setGpsErr(null); setPos({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }); }, []);
+  const onGpsErr = useCallback((e) => { if (e.code === 1) { setGpsBlocked(true); setGpsErr(null); } else setGpsErr("Waiting for GPS signal…"); }, []);
+
+  // Ask for location + keep a throttled watch (every 20s or 25m moved)
+  const startWatch = useCallback(() => {
+    if (!navigator.geolocation) { setGpsBlocked(true); setGpsErr("This phone's browser can't share location."); return; }
+    if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current);
+    // nudge the native permission prompt / re-check immediately
+    navigator.geolocation.getCurrentPosition(onFix, onGpsErr, { enableHighAccuracy: true, timeout: 15000 });
+    watchId.current = navigator.geolocation.watchPosition(onFix, onGpsErr, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+  }, [onFix, onGpsErr]);
+
   useEffect(() => {
-    if (!navigator.geolocation) { setGpsErr("This phone's browser doesn't share location."); return; }
-    const id = navigator.geolocation.watchPosition(
-      (p) => { setGpsErr(null); setPos({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }); },
-      (e) => setGpsErr(e.code === 1 ? "Location is blocked. Allow location for this page so the dock can stamp your time." : "Waiting for GPS signal…"),
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
-    return () => navigator.geolocation.clearWatch(id);
-  }, []);
+    startWatch();
+    let perm;
+    navigator.permissions?.query?.({ name: "geolocation" }).then((st) => {
+      perm = st;
+      const sync = () => { if (st.state === "denied") setGpsBlocked(true); else if (st.state === "granted") { setGpsBlocked(false); startWatch(); } };
+      sync();
+      st.onchange = sync;
+    }).catch(() => {});
+    return () => { if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current); if (perm) perm.onchange = null; };
+  }, [startWatch]);
   useEffect(() => {
     if (!pos) return;
     const l = lastSent.current;
@@ -64,7 +80,8 @@ export default function Driver() {
     if (pos && pos.accuracy < 1000) return res(pos);
     if (!navigator.geolocation) return rej(new Error("Location unavailable"));
     navigator.geolocation.getCurrentPosition((p) => res({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
-      () => rej(new Error("Turn on location so your tap is stamped with GPS")), { enableHighAccuracy: true, timeout: 15000 });
+      (e) => { if (e.code === 1) setGpsBlocked(true); rej(new Error(e.code === 1 ? "Location is blocked — turn it on to stamp your time" : "Turn on location so your tap is stamped with GPS")); },
+      { enableHighAccuracy: true, timeout: 15000 });
   });
   const tap = async (stop, action) => {
     setBusy(action);
@@ -96,14 +113,45 @@ export default function Driver() {
   const dwell = onSite ? (now - new Date(cur.arrived_at).getTime()) / 1000 : 0;
   const freeLeft = onSite && cur.free_expires_at ? (new Date(cur.free_expires_at).getTime() - now) / 1000 : 0;
   const away = cur && pos && cur.lat != null ? Math.max(0, dist(pos, cur) - (cur.radius_m || 300)) : null;
+  const isIOS = typeof navigator !== "undefined" && /iphone|ipad|ipod/i.test(navigator.userAgent);
 
   return (
     <div data-testid="driver-page" className="mx-auto min-h-screen max-w-md bg-white pb-10">
       <header className="flex items-center justify-between border-b px-4 py-3"><Logo /><span className="font-mono text-sm font-semibold">{d.load_number}</span></header>
+
+      {gpsBlocked && (
+        <div data-testid="driver-location-blocked" className="px-4 pt-4">
+          <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4">
+            <div className="flex items-center gap-2 text-amber-900"><Lock className="h-5 w-5 shrink-0" /><h2 className="text-lg font-semibold">Turn on location</h2></div>
+            <p className="mt-1 text-sm text-amber-900/90">Your phone is blocking location for this page, so the dock can't auto-stamp your in and out times. Please allow it — it's only used while this load is open.</p>
+            <ol className="mt-3 space-y-1 text-sm text-amber-900">
+              {isIOS ? (
+                <>
+                  <li>1. Tap <span className="font-semibold">“aA”</span> on the left of the address bar.</li>
+                  <li>2. Choose <span className="font-semibold">Website Settings</span> → <span className="font-semibold">Location</span> → <span className="font-semibold">Allow</span>.</li>
+                  <li>3. If it's greyed out, turn on <span className="font-semibold">Settings › Privacy › Location Services › Safari</span>.</li>
+                </>
+              ) : (
+                <>
+                  <li>1. Tap the <span className="font-semibold">lock / ⓘ</span> icon in the address bar.</li>
+                  <li>2. Open <span className="font-semibold">Permissions</span> and set <span className="font-semibold">Location</span> to <span className="font-semibold">Allow</span>.</li>
+                  <li>3. Tap <span className="font-semibold">Try again</span> below.</li>
+                </>
+              )}
+            </ol>
+            <button data-testid="driver-enable-location-button" onClick={startWatch}
+              className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-900 text-base font-semibold text-white active:scale-[0.98]">
+              <LocateFixed className="h-5 w-5" />I've turned it on — try again
+            </button>
+            <p className="mt-2 text-center text-xs text-amber-900/80">No GPS? You can still tap “I'm at the dock” below and your dispatcher will confirm the time.</p>
+          </div>
+        </div>
+      )}
+
       <div className="px-4 pt-4">
         <p className="text-base">Hi {d.driver_name || "driver"} · <span className="text-muted-foreground">{d.fleet_name}</span></p>
-        <div data-testid="driver-gps-status" className={`mt-3 flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${gpsErr ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-900"}`}>
-          <Satellite className="h-4 w-4" />{gpsErr || (pos ? `GPS on · ±${Math.round(pos.accuracy)} m · keep this page open at the dock` : "Finding your location…")}
+        <div data-testid="driver-gps-status" className={`mt-3 flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${gpsBlocked ? "bg-amber-100 text-amber-900" : gpsErr ? "bg-amber-50 text-amber-900" : pos ? "bg-emerald-50 text-emerald-900" : "bg-slate-100 text-slate-700"}`}>
+          <Satellite className="h-4 w-4" />{gpsBlocked ? "Location is off — turn it on above" : gpsErr || (pos ? `GPS on · ±${Math.round(pos.accuracy)} m · keep this page open at the dock` : "Finding your location…")}
         </div>
       </div>
 
