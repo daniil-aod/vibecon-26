@@ -1,0 +1,26 @@
+[
+  {
+    "content": "Add owner-invite role support + owner_user_id attach in current_member (server.py)",
+    "status": "completed"
+  },
+  {
+    "content": "Create demo.py: sample rate con PDF + BOL image generators, trail builder, full seed_demo + ensure_demo (version-gated)",
+    "status": "completed"
+  },
+  {
+    "content": "Wire ensure_demo into startup and add guarded /api/demo/reseed endpoint",
+    "status": "completed"
+  },
+  {
+    "content": "Run seeder, verify demo fleet + loads/invoices/evidence created and fingerprints verify",
+    "status": "completed"
+  },
+  {
+    "content": "Document demo in DEMO.md + PRD (keep-updated workflow via DEMO_VERSION)",
+    "status": "completed"
+  },
+  {
+    "content": "Call testing_agent to verify demo fleet end-to-end + the location-blocked driver fix",
+    "status": "completed"
+  }
+]

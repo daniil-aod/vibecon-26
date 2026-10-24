@@ -34,6 +34,7 @@ from ratecon import extract_ratecon  # noqa: E402
 from sms import send_sms, sms_configured  # noqa: E402
 import templates  # noqa: E402
 from pdfgen import build_packet  # noqa: E402
+import demo  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("dockclock")
@@ -109,9 +110,13 @@ async def current_member(user: dict = Depends(require_user)) -> dict:
     if not u.get("fleet_id") and u.get("email"):
         inv = await db.invites.find_one({"email": u["email"], "status": "pending"}, {"_id": 0})
         if inv:
-            await db.users.update_one({"user_id": u["user_id"]}, {"$set": {"fleet_id": inv["fleet_id"], "role": "dispatcher"}})
+            role = inv.get("role") or "dispatcher"
+            await db.users.update_one({"user_id": u["user_id"]}, {"$set": {"fleet_id": inv["fleet_id"], "role": role}})
             await db.invites.update_one({"id": inv["id"]}, {"$set": {"status": "accepted", "accepted_at": iso(now_utc())}})
-            u["fleet_id"], u["role"] = inv["fleet_id"], "dispatcher"
+            # An owner invite (e.g. the demo fleet) hands over ownership so the weekly summary reaches this person.
+            if role == "owner":
+                await db.fleets.update_one({"id": inv["fleet_id"]}, {"$set": {"owner_user_id": u["user_id"]}})
+            u["fleet_id"], u["role"] = inv["fleet_id"], role
     return u
 
 
@@ -1467,6 +1472,16 @@ async def summary_now(m: dict = Depends(fleet_member)):
     return {"ok": True}
 
 
+@api.post("/demo/reseed")
+async def demo_reseed(request: Request):
+    """Rebuild the guided demo fleet on demand (same bearer secret as the cron)."""
+    secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
+    auth = request.headers.get("authorization", "")
+    if not secret or not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return await demo.seed_demo(db)
+
+
 @api.get("/")
 async def root():
     return {"app": "DockClock", "ok": True}
@@ -1496,6 +1511,11 @@ async def startup():
     await db.invoices.create_index("fleet_id")
     await db.pings.create_index([("load_id", 1), ("ts", 1)])
     await db.users.create_index("user_id", unique=True)
+    try:
+        res = await demo.ensure_demo(db)
+        logger.info(f"demo fleet: {res}")
+    except Exception as e:  # noqa
+        logger.error(f"demo seed failed: {e}")
 
 
 @app.on_event("shutdown")

@@ -28,3 +28,6 @@ Small carriers (1–25 trucks) lose detention pay because nobody reads rate-con 
 Stripe Connect per carrier + 10%/$49 billing, factoring read-only access, broker reply tracking, pre-booking risk warning.
 ## Phase 3 backlog
 ELD integrations, factoring portal, detention-adjusted rate suggestion, Spanish driver page, cross-fleet benchmarks.
+
+## Guided demo fleet (see backend/DEMO.md)
+End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads covering rate-con AI extraction, live meter, broker notices, sealed/verified evidence, card payment, reminders, cap-hit dispute, scorecards. Version-gated by DEMO_VERSION (bump + restart rebuilds it; POST /api/demo/reseed forces it). Must be kept in sync as new features ship.
