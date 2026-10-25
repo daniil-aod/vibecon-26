@@ -11,7 +11,7 @@ import { PressButton } from "@/src/components/PressButton";
 import { FacilityMap } from "@/src/components/FacilityMap";
 import { useToast } from "@/src/components/Toast";
 import { ApiError, driverApi, DriverPayload, errMsg, Fix, recallApi, rememberApi, resolveApi, Stop } from "@/src/lib/api";
-import { getTrip, on, queuedCount, flushQueue, resumeTracking, startTracking, stopTracking, TrackingMode } from "@/src/lib/tracking";
+import { getTrip, on, queuedCount, flushQueue, resumeTracking, startTracking, stopTracking, TrackingMode, tripComplete } from "@/src/lib/tracking";
 import { useI18n } from "@/src/lib/i18n";
 import { LangToggle } from "@/src/components/LangToggle";
 import { TripSummary } from "@/src/components/TripSummary";
@@ -50,6 +50,7 @@ export default function DriverScreen() {
   const [busy, setBusy] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [queued, setQueued] = useState(0);
+  const [endSheet, setEndSheet] = useState(false);
   const toastRef = useRef(toast);
   toastRef.current = toast;
 
@@ -64,7 +65,9 @@ export default function DriverScreen() {
 
   const load = useCallback(async () => {
     if (!api) return;
-    try { setD(await driverApi.get(api, token)); setErr(null); } catch (e) {
+    try { const p = await driverApi.get(api, token); setD(p); setErr(null);
+      if (tripComplete(p) && (await getTrip())?.token === token) await stopTracking("delivered");
+    } catch (e) {
       if (e instanceof ApiError && e.status === 404) { setErr("invalid"); const t = await getTrip(); if (t?.token === token) await stopTracking("invalid"); }
       else if (!d) setErr(errMsg(e));
     }
@@ -151,7 +154,7 @@ export default function DriverScreen() {
       const data = await driverApi.tap(api, token, stop.id, action, fix);
       setD(data);
       toast.success(action === "arrive" ? L.toastArrive : L.toastDepart);
-      if (data.stops.every((s) => s.departed_at) && (await getTrip())?.token === token) await stopTracking("delivered");
+      if (tripComplete(data) && (await getTrip())?.token === token) await stopTracking("delivered");
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); }
   };
 
@@ -159,8 +162,10 @@ export default function DriverScreen() {
     if (!api) return;
     setBusy("bol");
     try {
-      setD(await driverApi.bol(api, token, stop.id, asset.uri, asset.mimeType || "image/jpeg"));
+      const data = await driverApi.bol(api, token, stop.id, asset.uri, asset.mimeType || "image/jpeg");
+      setD(data);
       toast.success(L.toastBol);
+      if (tripComplete(data) && (await getTrip())?.token === token) await stopTracking("delivered");
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); }
   };
 
@@ -180,6 +185,14 @@ export default function DriverScreen() {
   };
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+
+  // Fail-safe: the driver can end recording manually (e.g. BOL can't be photographed).
+  const endTrip = async () => {
+    setEndSheet(false);
+    await flushQueue();
+    await stopTracking("ended");
+    toast.info(L.toastEnded);
+  };
 
   const resetTest = async () => {
     if (!api) return;
@@ -338,7 +351,7 @@ export default function DriverScreen() {
             <View style={{ alignItems: "center" }}>
               <Lucide name="circle-check" size={48} color={colors.successStrong} />
               <Text style={[styles.facility, { marginTop: spacing.md }]}>{L.allDone}</Text>
-              <Text style={styles.muted}>{L.allDoneP}</Text>
+              <Text style={styles.muted} testID="driver-all-done-note">{tracking ? L.bolToFinish : L.allDoneP}</Text>
             </View>
             <TripSummary stops={stops} />
           </View>
@@ -358,6 +371,15 @@ export default function DriverScreen() {
               textStyle={{ fontSize: 17 }}
             />
             <Text style={styles.hint}>{L.bolHint(bolStop.facility_name)}</Text>
+          </View>
+        )}
+
+        {tracking && (
+          <View style={styles.section}>
+            <Pressable testID="driver-end-trip-button" onPress={() => setEndSheet(true)} style={styles.endBtn}>
+              <Lucide name="square" size={16} color={colors.mutedForeground} />
+              <Text style={styles.endT}>{L.endTrip}</Text>
+            </Pressable>
           </View>
         )}
 
@@ -393,6 +415,19 @@ export default function DriverScreen() {
             <Pressable testID="driver-background-skip-button" onPress={begin} style={styles.skip}><Text style={styles.skipT}>{L.notNow}</Text></Pressable>
           </View>
         </View>
+      </Modal>
+
+      <Modal visible={endSheet} transparent animationType="slide" onRequestClose={() => setEndSheet(false)}>
+        <Pressable style={styles.overlay} onPress={() => setEndSheet(false)}>
+          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]} testID="driver-end-trip-sheet">
+            <View style={styles.grab} />
+            <Lucide name="triangle-alert" size={28} color={colors.warning} />
+            <Text style={styles.sheetH}>{L.endTripH}</Text>
+            <Text style={styles.sheetP}>{L.endTripP}</Text>
+            <PressButton testID="driver-end-trip-confirm-button" size="md" label={L.endTripConfirm} icon="square" onPress={endTrip} bg={colors.warningText} fg={colors.primaryForeground} style={{ marginTop: spacing.lg, alignSelf: "stretch" }} />
+            <PressButton testID="driver-end-trip-cancel-button" size="md" label={L.keepTracking} onPress={() => setEndSheet(false)} bg={colors.surface} fg={colors.slate900} border={colors.slate900} style={{ marginTop: spacing.md, alignSelf: "stretch" }} />
+          </Pressable>
+        </Pressable>
       </Modal>
 
       <Modal visible={!!photoSheet} transparent animationType="slide" onRequestClose={() => setPhotoSheet(null)}>
@@ -440,6 +475,8 @@ const styles = StyleSheet.create({
   infoT: { fontFamily: fonts.body, fontSize: 14, lineHeight: 20, color: colors.slate700 },
   link: { fontFamily: fonts.bodySemi, fontSize: 14, color: colors.accent, paddingVertical: spacing.xs },
   resetBtn: { minHeight: 44, justifyContent: "center", alignSelf: "flex-start" },
+  endBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm, minHeight: 48, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border },
+  endT: { fontFamily: fonts.bodyMedium, fontSize: 15, color: colors.mutedForeground },
   b: { fontFamily: fonts.bodySemi },
   hi: { fontFamily: fonts.body, fontSize: 16, color: colors.slate900 },
   mutedInline: { color: colors.mutedForeground },

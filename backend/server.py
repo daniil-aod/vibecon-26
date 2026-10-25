@@ -1047,8 +1047,6 @@ async def driver_reset_test(tok: str):
         s.update({"arrived_at": None, "departed_at": None, "arrived_source": None, "departed_source": None,
                   "arrived_coords": None, "departed_coords": None, "events": [], "bol": [],
                   "notice": {"status": "pending", "due_at": None, "sent_at": None}})
-        if s.get("anchor_on_first_fix"):
-            s.update({"lat": None, "lng": None, "address": "Set to your location when you press Start trip"})
     await db.loads.update_one({"id": load["id"]}, {"$set": {"stops": load["stops"], "last_ping": None, "updated_at": iso(now_utc())}})
     await db.pings.delete_many({"load_id": load["id"]})
     await db.invoices.delete_many({"load_id": load["id"]})
@@ -1119,13 +1117,6 @@ async def driver_ping(tok: str, body: PingIn):
     acc = body.accuracy or 50
     stop = _current_stop(load)
     event = None
-    if (stop is not None and stop.get("lat") is None and stop.get("anchor_on_first_fix") and load.get("is_test_load")
-            and (body.accuracy or 50) <= 100):
-        # Test load: the first dock is placed where the driver pressed Start trip (only on an accurate fix).
-        stop["lat"], stop["lng"] = body.lat, body.lng
-        stop["address"] = f"Your location when you pressed Start ({body.lat:.5f}, {body.lng:.5f})"
-        await db.loads.update_one({"id": load["id"], "stops.id": stop["id"]}, {"$set": {
-            "stops.$.lat": body.lat, "stops.$.lng": body.lng, "stops.$.address": stop["address"]}})
     if stop is not None and stop.get("lat") is not None:
         dist = haversine_m(body.lat, body.lng, stop["lat"], stop["lng"])
         radius = float(stop.get("radius_m") or DEFAULT_RADIUS)

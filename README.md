@@ -311,8 +311,13 @@ is the Expo driver app. `web/src/pages/Driver.js` now just forwards old `/d/:tok
 - **Precise location:** on iOS, if the driver picked Approximate, the app shows Apple's temporary precise prompt
   (`expo-location/next`, `locationFullAccuracyPermission`). On Android it re-asks for fine location. If the driver
   still says no, a card links to Settings.
-- **Which backend:** the `api` origin from the link is accepted only if it's the app's own `EXPO_PUBLIC_BACKEND_URL`
-  host or is listed in `EXPO_PUBLIC_EXTRA_API_HOSTS`. Add the production web app's domain there.
+- **Which backend:** the app talks to `EXPO_PUBLIC_DRIVER_API_URL` (the web app's backend, currently
+  `https://naughty-hugle-13.preview.emergentagent.com`). An `api` origin carried in a link is accepted only if it's
+  that host, this project's own `EXPO_PUBLIC_BACKEND_URL` host, or listed in `EXPO_PUBLIC_EXTRA_API_HOSTS`.
+- **Trip lifecycle:** Start can be pressed anywhere. Every fix is sent as a ping (the full route). The server
+  geofence stamps arrival when the driver enters a stop's zone (free time starts then), and departure when they
+  leave it (radius + 150 m buffer against GPS drift). Tracking stops automatically only when every stop is departed
+  AND, if the contract requires a signed BOL, the final stop has a BOL photo. **End trip** is the manual fail-safe.
 - Manual "I'm at the dock / I'm leaving" taps and the BOL photo (camera or gallery, `expo-image-picker`) remain.
   The map is OSM/Leaflet in a WebView.
 

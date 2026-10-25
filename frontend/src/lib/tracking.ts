@@ -37,6 +37,12 @@ export async function getTrip(): Promise<Trip | null> {
 }
 
 const allDone = (p: DriverPayload) => p.stops.length > 0 && p.stops.every((s) => !!s.departed_at);
+/** The trip is finished once every stop is departed and, if the contract needs it, the final BOL photo is attached. */
+export const tripComplete = (p: DriverPayload) => {
+  if (!allDone(p)) return false;
+  const last = [...p.stops].sort((a, b) => a.seq - b.seq).pop();
+  return !p.requires_signed_bol || (last?.bol_count || 0) > 0;
+};
 
 // ---- Offline backup: GPS points taken without signal are saved on the phone (with their real time)
 // and sent in order once coverage returns, so no evidence is lost.
@@ -55,7 +61,7 @@ async function flush(t: Trip): Promise<boolean> {
       const data = await driverApi.ping(t.api, t.token, q[0]);
       q.shift();
       emit("payload", data);
-      if (allDone(data)) { await saveQueue(); await stopTracking("delivered"); return true; }
+      if (tripComplete(data)) { await saveQueue(); await stopTracking("delivered"); return true; }
     } catch (e) {
       if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 404 && e.status !== 408 && e.status !== 429) { q.shift(); continue; }
       await saveQueue();

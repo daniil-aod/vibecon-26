@@ -62,4 +62,11 @@ End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads 
 - Tested: iteration_8 (backend 10/10, frontend pass); accuracy gate and card order fixed afterwards.
 - Backlog: localize server-provided test-load strings; delete BOL files on test reset.
 
+## 2026-06 — Round 5
+- Driver app now talks to the web app's backend (EXPO_PUBLIC_DRIVER_API_URL = naughty-hugle-13).
+- Start from anywhere; full route tracked; server geofence stamps arrival (free time starts) and departure. Tracking auto-stops only when all stops are departed and the final BOL is attached (if required); End trip fail-safe. Test-load anchor logic removed (DEMO_VERSION 4).
+- Tested: iteration_9 all pass.
+- Port to the web app project (naughty-hugle-13) so it matches: /api/open landing page + web /d redirect, honoring ping ts for offline points, driver email + schedules, reset-test.
+
+
 

@@ -30,7 +30,7 @@ from storage import put_object, APP_NAME
 
 DEMO_FLEET_ID = "demo-dockclock-fleet"
 DEMO_OWNER_EMAIL = "abdowns4@gmail.com"
-DEMO_VERSION = 3  # bump to force a rebuild on next startup when features change
+DEMO_VERSION = 4  # bump to force a rebuild on next startup when features change
 PREVIEW_URL = "https://load-locator-4.preview.emergentagent.com"
 
 # collections that hold demo-fleet-scoped data (everything keyed by fleet_id)
@@ -572,10 +572,8 @@ class _Seeder:
         # Start trip, so the owner can test geofence arrival/departure for real from anywhere.
         detG = det_for("evergreen", 1800)
         gpu, _ = self._make_stop(0, "pickup", "joliet", appt=now_utc().strftime("%Y-%m-%dT08:00"))
-        gpu.update({"facility_id": None, "facility_name": "Your test dock", "lat": None, "lng": None, "radius_m": 150,
-                    "address": "Set to your location when you press Start trip", "anchor_on_first_fix": True})
         gdl, gfac = self._make_stop(1, "delivery", "fontana", appt=(now_utc() + timedelta(days=1)).strftime("%Y-%m-%dT09:00"))
-        stopsG = [{"type": "pickup", "facility_name": "Your test dock", "address": "(your location)", "appointment": gpu["appointment"]},
+        stopsG = [{"type": "pickup", "facility_name": gpu["facility_name"], "address": gpu["address"], "appointment": gpu["appointment"]},
                   {"type": "delivery", "facility_name": gfac["name"], "address": gfac["address"], "appointment": gdl["appointment"]}]
         pdfG = make_ratecon_pdf("TEST-0001", BROKERS["evergreen"], "Summit Ridge Carriers LLC", stopsG, detG)
         precG = await self._store(pdfG, "application/pdf", "pdf", "ratecon", {"original_filename": "TEST-0001-ratecon.pdf"})
