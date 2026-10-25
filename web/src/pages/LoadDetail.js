@@ -17,10 +17,12 @@ import { DetentionMeter } from "@/components/DetentionMeter";
 import { FacilityMap } from "@/components/Maps";
 import { TrailPlayback } from "@/components/TrailPlayback";
 import { AuthImage } from "@/components/AuthImage";
-import LoadForm from "@/pages/LoadForm";
+import LoadForm, { fromLoad } from "@/pages/LoadForm";
+import { BillingPanel } from "@/components/BillingPanel";
 import { DriverEmailCard } from "@/components/DriverEmailCard";
 
-const EVL = { arrival: [LogIn, "Arrived"], departure: [LogOut, "Departed"], free_time_expired: [Clock, "Free time ended"], notice_sent: [BellRing, "Broker notice sent"], bol_uploaded: [Camera, "BOL photo uploaded"] };
+const EVL = { arrival: [LogIn, "Arrived"], departure: [LogOut, "Departed"], free_time_expired: [Clock, "Free time ended"], notice_sent: [BellRing, "Broker notice sent"], bol_uploaded: [Camera, "BOL photo uploaded"],
+  document_uploaded: [FileText, "Document uploaded"], notice_phone_recorded: [BellRing, "Phone notice recorded"], notice_portal_recorded: [BellRing, "Portal notice recorded"] };
 const SRC = { geofence: "geofence", driver_tap: "driver tap + GPS", dispatcher_edit: "dispatcher edit" };
 const toLocalInput = (iso) => { if (!iso) return ""; const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 
@@ -59,7 +61,7 @@ export default function LoadDetail() {
   }, "Times updated");
   const saveGeo = () => act("geo", async () => { await api.patch(`/facilities/${geo.facility_id}`, { lat: geo.lat, lng: geo.lng, radius_m: geo.radius_m }); setGeo(null); }, "Geofence saved");
   const sendNotice = (s) => act(`n${s.id}`, () => api.post(`/loads/${id}/stops/${s.id}/notice`), "Broker notice sent");
-  const sendInvoice = (inv) => act(`i${inv.id}`, () => api.post(`/invoices/${inv.id}/send`), "Invoice emailed to broker");
+  const sendInvoice = (inv) => act(`i${inv.id}`, () => api.post(`/invoices/${inv.id}/send`), "Invoice emailed");
   const del = () => act("del", async () => { await api.delete(`/loads/${id}`); nav("/app/loads"); }, "Load deleted");
 
   if (!load) return <div className="space-y-4"><Skeleton className="h-24" /><Skeleton className="h-80" /></div>;
@@ -78,7 +80,7 @@ export default function LoadDetail() {
         </div>
         <div className="flex flex-wrap gap-2">
           {load.ratecon_file_id && <Button data-testid="load-view-ratecon-button" variant="outline" size="sm" onClick={openRatecon}><FileText className="mr-1.5 h-4 w-4" />Rate con</Button>}
-          <Button data-testid="load-edit-button" variant="outline" size="sm" onClick={() => setEdit({ ...load, stops: load.stops.map(({ billing, ...s }) => s) })}><Pencil className="mr-1.5 h-4 w-4" />Edit terms</Button>
+          <Button data-testid="load-edit-button" variant="outline" size="sm" onClick={() => setEdit(fromLoad({ ...load, stops: load.stops.map(({ billing, ...s }) => s) }))}><Pencil className="mr-1.5 h-4 w-4" />Edit terms</Button>
           <Button data-testid="load-delete-button" variant="ghost" size="sm" onClick={() => setConfirmDel(true)}><Trash2 className="h-4 w-4" /></Button>
         </div>
       </div>
@@ -125,6 +127,8 @@ export default function LoadDetail() {
             );
           })}
 
+          <BillingPanel api={api} loadId={id} tz={tz} stops={load.stops} onChanged={refresh} />
+
           <div>
             <h2 className="mb-3 font-display text-lg font-semibold">Truck playback</h2>
             {pb ? <TrailPlayback pings={pb.pings} stops={pb.stops} events={pb.events} tz={tz} /> : <Skeleton className="h-80" />}
@@ -151,7 +155,7 @@ export default function LoadDetail() {
                 <div key={inv.id} data-testid={`load-invoice-${inv.id}`} className="flex items-center gap-3 rounded-lg border p-3">
                   <div className="min-w-0 flex-1"><div className="font-mono text-sm font-semibold">{inv.number}</div><div className="truncate text-xs text-muted-foreground">{inv.facility_name}</div></div>
                   <span className="num font-mono text-sm">{money(inv.amount)}</span>
-                  {inv.status === "ready" ? <Button size="sm" data-testid={`load-send-invoice-${inv.id}`} disabled={busy === `i${inv.id}`} onClick={() => sendInvoice(inv)}><Send className="mr-1 h-3.5 w-3.5" />Send</Button> : <StatusChip status={inv.status} />}
+                  {inv.status === "ready" && load.billing_setup && load.stops.every((x) => x.departed_at) ? <StatusChip status="ready" /> : inv.status === "ready" ? <Button size="sm" data-testid={`load-send-invoice-${inv.id}`} disabled={busy === `i${inv.id}`} onClick={() => sendInvoice(inv)}><Send className="mr-1 h-3.5 w-3.5" />Send</Button> : <StatusChip status={inv.status} />}
                 </div>))}
                 <Link to="/app/invoices" className="block pt-1 text-xs text-teal-700 hover:underline">Manage invoices</Link>
               </div>

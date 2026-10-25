@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 13 retest of the 2 HIGH bugs from iteration_12, the minor fixes, and the main flow. Both HIGH bugs are FIXED. Regression: test_billing_packet_http.py and test_finalization.py 21/21 passed. New file test_billing_fixes_http.py 8/8 passed. Bug 1 (Send guard): Send on a completed packet-billed load returns 400 with 'Completion & billing'. GET /invoices sets packet_billed=true. The Invoices page shows invoice-bill-via-load-<id> and no invoice-send-*. The load page shows no load-send-invoice-* on a completed packet load. Early pickup Send with a confirmed destination returns 200 and goes to ap@example.test. An unconfirmed destination returns 400. Bug 2 (corrections): after Adjust times, the correction_pending blocker is present, /billing/submit returns 400, and billing-submit-button is hidden in the UI. pending-adjustment-DC-xxxx is shown with Issue correction. An empty reason returns 400. The supplement -A1 is ready at exactly the difference (37.5). Without a reload, blockers are [] and the state is revision_review with no stale '(simulated)'. 'Issue revised packet & submit' gives v2 issued and v1 superseded, and the v1 PDF bytes are unchanged. v2 totals: invoiced = detention_calculated = 225, with A1 listed as 'New - submitted with this packet'. A decrease creates a credit_note (-A2). Credit note then v2 gives correct packet totals (112.5). Minor fixes verified: a None->'' no-op PUT keeps confirmed_at (a real AP change still drops it); the timeline shows 'Document uploaded'; the drawer shows 'Upcoming due date · day 27 / Past due · day 31 / 37 / Final notice · day 51'. The signature message is only for need_sig docs (code review). Demo fleet unchanged: EVG-77421 accepted, APX-30277 blocked [document], APX-30188 failed, RL-55102 awaiting_portal, EVG-77510 not_needed. Found 2 new minor issues.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "finalize.invoice_balance / completion.payment", "issue": "Credit notes do not reduce outstanding. Repro: submitted load 187.5, delivery departure -60 min, Issue correction gives DC-xxxx-A1 credit_note 75 (status 'credit'), revised packet v2 has totals invoiced/outstanding 112.5. But completion.payment.outstanding is still 187.5, so the panel PAYMENT chip and probably the Invoices 'Waiting on brokers' total are overstated. Subtract credit notes (adjusts_invoice_id) from their original's balance."},
+      {"endpoint": "POST /api/invoices/{id}/send (early pickup)", "issue": "Still requires broker.email ('Add the broker's email on the load first', 400) even when the confirmed AP email destination is set, although the email goes to the AP address. Repro: confirmed load with ap_email, broker.email='' -> pickup departs -> send -> 400. Only require the broker email when there is no destination recipient."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Load detail / Invoices drawer", "issues": [
+        "While a correction is pending, the SUBMISSION chip and the 'Final invoice submission' obligation still read 'Accepted (simulated)'. A 'Correction pending' state would be clearer.",
+        "The 'Issue correction' button has no data-testid.",
+        "The LoadDetail sendInvoice toast says 'Invoice emailed to broker' and the drawer label 'Broker' shows the AP email. Consider 'Billed to'.",
+        "The timeline still shows the raw quoted value \"pod\" after 'Document uploaded'."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_billing_fixes_http.py", "/app/backend/tests/test_billing_packet_http.py", "/app/backend/tests/test_finalization.py", "/app/tests/billing_fix_edge.py", "/app/tests/demo_state_check.py", "/app/tests/mk_iter13_ui_loads.py", "/app/test_reports/pytest/iter13_regression.xml", "/app/test_reports/pytest/iter13_fixes.xml"],
+  "action_items": [
+    "Subtract credit notes from outstanding in completion.payment and in the invoice list totals",
+    "Allow early send without broker.email when a confirmed AP destination exists",
+    "Optional: show 'Correction pending' in the submission chip; add data-testid to the Issue correction button; fix the 'emailed to broker' and 'Broker' wording"
+  ],
+  "critical_code_review_comments": [
+    "finalize: ctx.pending_adjustments is a module-global passed into blockers(). It is safe today only because no await happens between set and reset. Pass it as an argument instead.",
+    "DELETE /loads is refused once any invoice is sent, so QA loads with sent invoices pile up in the QA fleet (expected, but test data grows)."
+  ],
+  "updated_files": ["/app/backend/tests/test_billing_fixes_http.py", "/app/tests/billing_fix_edge.py", "/app/tests/demo_state_check.py", "/app/tests/mk_iter13_ui_loads.py"],
+  "success_rate": {"backend": "100% (29/29 pytest); 2 minor issues from edge probes", "frontend": "100% of retest UI checks"},
+  "seed_data_creation": "QA fleet: TEST-CORRUI (now v2 issued, has -A1), TEST-BLKUI (completed, blocked, ready invoices), plus several TEST-* loads with sent invoices that cannot be deleted. The demo fleet was not touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest -n 0 tests/test_billing_packet_http.py tests/test_finalization.py tests/test_billing_fixes_http.py. Creating files under /app/backend triggers a backend hot reload (a 502 for a few seconds). UI loads: python /app/tests/mk_iter13_ui_loads.py. Get a Clerk ticket with python /app/tests/clerk_helper.py <email> (single use). The server clock reads Oct 2026."
+}

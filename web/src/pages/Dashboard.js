@@ -33,7 +33,7 @@ export default function Dashboard() {
     catch (e) { toast.error(errMsg(e)); }
   };
   const sendInv = async (a) => {
-    try { await api.post(`/invoices/${a.invoice_id}/send`); toast.success("Invoice emailed to broker"); load(); }
+    try { await api.post(`/invoices/${a.invoice_id}/send`); toast.success("Invoice emailed"); load(); }
     catch (e) { toast.error(errMsg(e)); }
   };
 

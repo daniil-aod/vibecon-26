@@ -20,6 +20,10 @@ class EmailError(Exception):
     pass
 
 
+class EmailTimeout(EmailError):
+    """The provider did not answer in time: the message may or may not have been accepted."""
+
+
 _SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
 _CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
              "send us your password", "enter your password below", "confirm your card number",
@@ -115,6 +119,9 @@ async def send_email(*, to: str, subject: str, html: str, reply_to: str | None =
             raise EmailError("Email is temporarily unavailable (account billing state)")
         logger.error(f"Email send failed: {e.response.status_code} {e.response.text[:300]}")
         raise EmailError("Failed to send email")
+    except (httpx.TimeoutException, httpx.RemoteProtocolError) as e:
+        logger.error(f"Email send timeout: {e}")
+        raise EmailTimeout("Email provider did not confirm in time - submission uncertain")
     except Exception as e:  # noqa
         logger.error(f"Email send error: {e}")
         raise EmailError("Failed to send email")

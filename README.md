@@ -288,7 +288,7 @@ curl -X POST "$BACKEND_URL/api/demo/reseed" -H "Authorization: Bearer $WEBHOOK_C
 ```
 Note: a rebuild regenerates `public_token`s, so `/e/...` and `/d/...` links change. List current links:
 `python -c "..."` querying loads.driver_token and invoices.public_token for the demo fleet.
-Current `DEMO_VERSION = 3`. Demo driver tokens are now deterministic (sha256 of fleet id + load number), so driver
+Current `DEMO_VERSION = 5` (adds billing-packet states). Demo driver tokens are now deterministic (sha256 of fleet id + load number), so driver
 links survive reseeds. **TEST-0001** is the owner's own test load: stop 1 "Your test dock" is anchored at the first
 accurate (≤100 m) GPS fix after Start trip, with radius 150 m, so departure fires about 300 m away. `POST
 /api/driver/{tok}/reset-test` (test loads only) resets it.
@@ -423,3 +423,50 @@ tail -n 80 /var/log/supervisor/frontend.*.log
 cd /app/backend && pip install <pkg> && pip freeze > requirements.txt
 cd /app/frontend && yarn add <pkg>        # never npm
 ```
+
+
+---
+
+## 20. Load completion & Detention Billing Packet (`backend/finalize.py`, `backend/packetpdf.py`)
+
+**One shared service:** `finalize.finalize_load(load_id, trigger, actor)` runs at the end of `process_load()`, which is
+called after geofence departures (`/driver/{tok}/ping`), driver taps, BOL/document uploads, dispatcher time corrections,
+term edits (`PUT /loads/{id}`), approvals, notice records, conflict resolution, invoice corrections and the 15-minute cron
+(`trigger="cron_recovery"`). It is single-flight per load (DB lock `finalize_lock_until` + `finalize_dirty` flag).
+
+**Separate states** live in `load.completion`: `transport` (not_started/in_progress/completed + review_flags),
+`documents`, `approvals`, `packet` (none/draft/issued), `submission` (blocked/awaiting_review/queued/accepted/failed/
+uncertain/awaiting_portal/awaiting_manual/revision_review/not_needed), `payment`, plus `blockers[]` (code, message, action).
+
+**One calculation:** `core.compute_load_billing(load, now, tz)` - per-stop terms overrides, billing start rule
+(arrival / appointment-or-arrival-later), late-arrival voiding, rounding (completed increments / round up / nearest /
+exact), caps per stop / per load (cumulative in stop order) / per day (only with a confirmed `per_day_definition`).
+Decimal money. `stops_with_billing()` (dashboard, driver page, invoices, PDFs, Stripe) reads it. Unknown terms are
+reported in `missing_terms`, never guessed. Known contract test: 08:00-11:10 + 14:00-17:35 at 2 h free / $75 / 15 min
+= $75 + $112.50; per-load cap $150 -> $75 + $75.
+
+**Invoices:** existing per-stop invoices are kept (unique `stop_key`). Sent/paid amounts never change; a recalculation
+sets `pending_adjustment` and blocks the revision until `POST /invoices/{id}/adjust` creates a supplement (`-A1`, only the
+difference is collectible) or a credit note. The packet is a cover/bundle, not a new collectible invoice.
+
+**Packets** (`packets` collection, unique `(load_id, version)`): an immutable snapshot (`snapshot`, `snapshot_hash`,
+`evidence_cutoff` = final departure + 45 min, pings filtered by `received_at`), stored PDF (`pdf_file_id`, `pdf_sha256`),
+creator, retention `keep_forever`. Drafts are regenerated only when the snapshot changes; issuing freezes it and seals new
+invoices from the snapshot. Late GPS after issue -> `supplements[]` (issued packet untouched); material changes -> new
+draft version that `supersedes` the issued one. `verify_packet()` (integrity) is separate from `source_comparison()`.
+
+**Submission:** durable `outbox` (unique `idempotency_key` = `billing_submission:{packet_id}`, atomic claim, retries,
+expired claims -> `uncertain`, never resent blindly; `/outbox/{id}/resolve` to reconcile). **`BILLING_SUBMISSION_MODE`
+defaults to `simulate`: no billing email, broker notice, approval request or reminder email is sent; refs are
+`SIMULATED-xxxx`.** Set `live` only when ready. The managed email helper has no attachment support, so packets go as a
+secure link `/api/public/packets/{token}/pdf` (issued only); payors that require attachments stay blocked. Portal/other
+channels -> `awaiting_portal` task, invoices marked submitted only when the dispatcher records the reference.
+
+**Driver app:** `tripComplete` = server `transport_completed` (or all stops departed). GPS stops then, even if paperwork is
+missing (`documents_needed` is shown); queued offline points are flushed first and kept (`dockclock.pendingFlush`) if offline.
+
+**Tests:** `backend/tests/test_finalization.py` (8 in-process scenarios), `backend/tests/test_billing_packet_http.py`
+(HTTP, QA fleet via `tests/clerk_helper.py`). Sample PDF: `tests/artifacts/sample_billing_packet.pdf`.
+Demo (v5): EVG-77421 submitted (simulated), APX-30277 awaiting signature confirmation, APX-30188 submission failed
+(simulated rejection), RL-55102 awaiting portal, EVG-77510 zero detention.
+

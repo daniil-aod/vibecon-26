@@ -37,12 +37,10 @@ export async function getTrip(): Promise<Trip | null> {
 }
 
 const allDone = (p: DriverPayload) => p.stops.length > 0 && p.stops.every((s) => !!s.departed_at);
-/** The trip is finished once every stop is departed and, if the contract needs it, the final BOL photo is attached. */
-export const tripComplete = (p: DriverPayload) => {
-  if (!allDone(p)) return false;
-  const last = [...p.stops].sort((a, b) => a.seq - b.seq).pop();
-  return !p.requires_signed_bol || (last?.bol_count || 0) > 0;
-};
+/** Transport is finished once every stop has a recorded departure (the server is the source of truth).
+ *  Missing paperwork never keeps GPS running: the BOL/POD photo can still be added after tracking stops. */
+export const tripComplete = (p: DriverPayload) => !!p.transport_completed || allDone(p);
+const PENDING_KEY = "dockclock.pendingFlush";
 
 // ---- Offline backup: GPS points taken without signal are saved on the phone (with their real time)
 // and sent in order once coverage returns, so no evidence is lost.
@@ -61,6 +59,7 @@ async function flush(t: Trip): Promise<boolean> {
       const data = await driverApi.ping(t.api, t.token, q[0]);
       q.shift();
       emit("payload", data);
+      if (tripComplete(data) && !q.length && trip) { await saveQueue(); await stopTracking("completed"); return true; }
 
     } catch (e) {
       if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 404 && e.status !== 408 && e.status !== 429) { q.shift(); continue; }
@@ -74,10 +73,13 @@ async function flush(t: Trip): Promise<boolean> {
 }
 
 export async function flushQueue() {
-  const t = await getTrip();
+  const t = (await getTrip()) || (await storage.getJSON<Trip>(PENDING_KEY));
   if (!t || inFlight) return;
   inFlight = true;
-  try { await flush(t); } finally { inFlight = false; }
+  try {
+    const ok = await flush(t);
+    if (ok && !(await getTrip())) { await storage.removeItem(PENDING_KEY); await storage.removeItem(QUEUE_KEY); }
+  } finally { inFlight = false; }
 }
 
 async function handleFix(loc: Location.LocationObject) {
@@ -197,10 +199,26 @@ export async function stopTracking(reason = "stopped") {
       if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK)) await Location.stopLocationUpdatesAsync(LOCATION_TASK);
     } catch {}
   }
+  // Preserve and flush evidence already collected offline before clearing it (never for an invalid/reset link).
+  if (ending && reason !== "invalid" && reason !== "reset") {
+    const q = await loadQueue();
+    if (q.length) {
+      let sent = false;
+      try { sent = await flush(ending); } catch { sent = false; }
+      if (!sent && (queue || []).length) {
+        await storage.setJSON(PENDING_KEY, ending); // keep the saved points; flushQueue() sends them when signal returns
+        trip = null;
+        await storage.removeItem(TRIP_KEY);
+        emit("stopped", { reason });
+        return;
+      }
+    }
+  }
   trip = null;
   queue = [];
   await storage.removeItem(QUEUE_KEY);
   await storage.removeItem(TRIP_KEY);
+  await storage.removeItem(PENDING_KEY);
   emit("queue", 0);
   emit("stopped", { reason });
 }

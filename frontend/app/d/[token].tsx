@@ -366,7 +366,7 @@ export default function DriverScreen() {
             <View style={{ alignItems: "center" }}>
               <Lucide name="circle-check" size={48} color={colors.successStrong} />
               <Text style={[styles.facility, { marginTop: spacing.md }]}>{L.allDone}</Text>
-              <Text style={styles.muted} testID="driver-all-done-note">{!tracking ? L.allDoneP : complete ? L.tapEndRide : L.bolToFinish}</Text>
+              <Text style={styles.muted} testID="driver-all-done-note">{!tracking ? (d.documents_needed?.length ? L.docsStillNeeded : L.allDoneP) : complete ? L.tapEndRide : L.bolToFinish}</Text>
             </View>
             <TripSummary stops={stops} />
           </View>

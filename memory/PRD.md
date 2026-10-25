@@ -75,3 +75,9 @@ End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads 
 
 
 
+
+## 2026-06 — Live billing email
+- BILLING_SUBMISSION_MODE=live in backend/.env: billing packets and invoices now really email the billing contact. Demo fleets always stay simulated (finalize.enqueue checks is_demo).
+- Outstanding KPI and weekly email now count 'issued' + 'sent' invoices. Toasts/menus use the wording "emailed" / "Re-send invoice"; invoice history is capitalised and shows notes (e.g. SIMULATED).
+- Provider limits: 429 rate-limit -> job stays queued, retried by the 15-min cron tick; fake domains (example.test) are rejected with 422. Run backend HTTP regression suites with BILLING_SUBMISSION_MODE=simulate (they expect simulated=True and use fake addresses). Live check: tests/test_live_email_submit.py (sends to delivered@resend.dev).
+- Known env issue: Expo driver app (/app/frontend) supervisor program FATAL: node_modules missing ("expo: not found"). Web dashboard runs on :3000.

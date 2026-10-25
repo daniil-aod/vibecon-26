@@ -18,6 +18,7 @@ export default function Settings() {
   const [team, setTeam] = useState({ members: [], invites: [] });
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState("");
+  const [bp, setBp] = useState(Object.fromEntries(["legal_name", "billing_email", "mc_number", "usdot_number", "phone", "address", "remittance_address", "completion_reports"].map((k) => [k, fleet[k] ?? (k === "completion_reports" ? false : "")])));
   const loadTeam = () => api.get("/fleet/team").then((r) => setTeam(r.data)).catch(() => {});
   useEffect(() => { loadTeam(); }, []); // eslint-disable-line
 
@@ -48,6 +49,17 @@ export default function Settings() {
           </RadioGroup>
         </div>
         {owner && <div className="mt-6 flex justify-end"><Button data-testid="settings-save-button" onClick={save} disabled={busy === "save"}>Save settings</Button></div>}
+      </section>
+
+      <section data-testid="settings-billing-profile" className="rounded-2xl border bg-card p-6 card-shadow">
+        <h2 className="font-semibold">Billing profile</h2>
+        <p className="mt-1 text-xs text-muted-foreground">Printed on every detention billing packet. Only enter MC/USDOT numbers you have verified. Originals and issued packets are kept forever (never auto-deleted).</p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          {[["legal_name", "Carrier legal name"], ["billing_email", "Billing contact email (copied, reply-to)"], ["mc_number", "MC number"], ["usdot_number", "USDOT number"], ["phone", "Billing phone"], ["address", "Business address"], ["remittance_address", "Remit-to address"]].map(([k, l]) => (
+            <div key={k} className={k.includes("address") ? "sm:col-span-2" : ""}><Label>{l}</Label><Input data-testid={`settings-billing-${k}`} disabled={!owner} value={bp[k] || ""} onChange={(e) => setBp({ ...bp, [k]: e.target.value })} /></div>))}
+        </div>
+        <label className="mt-4 flex items-center gap-2 text-sm"><input type="checkbox" data-testid="settings-completion-reports" disabled={!owner} checked={!!bp.completion_reports} onChange={(e) => setBp({ ...bp, completion_reports: e.target.checked })} />Email me a completion report for loads with no detention</label>
+        {owner && <div className="mt-6 flex justify-end"><Button data-testid="settings-billing-save-button" disabled={busy === "bp"} onClick={async () => { setBusy("bp"); try { await api.patch("/fleet/billing-profile", bp); await refresh(); toast.success("Billing profile saved"); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); } }}>Save billing profile</Button></div>}
       </section>
 
       <section className="rounded-2xl border bg-card p-6 card-shadow">
