@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { toast } from "sonner";
-import { MessageSquareText, Copy, Pencil, FileText, Trash2, BellRing, Clock, MapPin, Camera, LogIn, LogOut, Send, Crosshair, ExternalLink } from "lucide-react";
+import { Pencil, FileText, Trash2, BellRing, Clock, MapPin, Camera, LogIn, LogOut, Send, Crosshair } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,6 +18,7 @@ import { FacilityMap } from "@/components/Maps";
 import { TrailPlayback } from "@/components/TrailPlayback";
 import { AuthImage } from "@/components/AuthImage";
 import LoadForm from "@/pages/LoadForm";
+import { DriverEmailCard } from "@/components/DriverEmailCard";
 
 const EVL = { arrival: [LogIn, "Arrived"], departure: [LogOut, "Departed"], free_time_expired: [Clock, "Free time ended"], notice_sent: [BellRing, "Broker notice sent"], bol_uploaded: [Camera, "BOL photo uploaded"] };
 const SRC = { geofence: "geofence", driver_tap: "driver tap + GPS", dispatcher_edit: "dispatcher edit" };
@@ -27,7 +28,7 @@ export default function LoadDetail() {
   const { id } = useParams();
   const api = useApi();
   const nav = useNavigate();
-  const { fleet, sms_configured } = useFleet();
+  const { fleet } = useFleet();
   const tz = fleet?.timezone;
   const [load, setLoad] = useState(null);
   const [pb, setPb] = useState(null);
@@ -46,13 +47,6 @@ export default function LoadDetail() {
   useEffect(() => { refresh(); const t = setInterval(refresh, 15000); return () => clearInterval(t); }, [refresh]);
 
   const act = async (key, fn, ok) => { setBusy(key); try { await fn(); if (ok) toast.success(ok); await refresh(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); } };
-  const textDriver = () => act("sms", async () => {
-    const { data } = await api.post(`/loads/${id}/sms`);
-    if (data.sent) toast.success("Text sent to driver");
-    else if (data.reason === "not_configured") { await navigator.clipboard?.writeText(data.driver_url).catch(() => {}); toast.info("Texting isn't set up yet. Link copied, send it to your driver."); }
-    else toast.error(`Text failed: ${data.detail || data.reason}`);
-  });
-  const copyLink = async () => { try { await navigator.clipboard.writeText(load.driver_url); toast.success("Driver link copied"); } catch { toast.info(load.driver_url); } };
   const openRatecon = async () => {
     try { const r = await api.get(`/loads/${id}/ratecon`, { responseType: "blob" }); window.open(URL.createObjectURL(r.data), "_blank"); } catch (e) { toast.error(errMsg(e)); }
   };
@@ -71,7 +65,6 @@ export default function LoadDetail() {
   if (!load) return <div className="space-y-4"><Skeleton className="h-24" /><Skeleton className="h-80" /></div>;
   const det = load.detention || {};
   const events = load.stops.flatMap((s) => (s.events || []).map((e) => ({ ...e, facility: s.facility_name }))).sort((a, b) => (a.at || "").localeCompare(b.at || ""));
-  const lastSms = (load.sms_log || []).slice(-1)[0];
 
   return (
     <div className="space-y-6">
@@ -139,19 +132,7 @@ export default function LoadDetail() {
         </div>
 
         <div className="space-y-6">
-          <div className="rounded-2xl border bg-card p-5 card-shadow">
-            <h3 className="text-sm font-semibold">Driver check-in link</h3>
-            <p className="mt-1 text-sm">{load.driver?.name || "No driver yet"} <span className="font-mono text-muted-foreground">{load.driver?.phone}</span></p>
-            <div className="mt-4 flex flex-col gap-2">
-              <Button data-testid="load-text-driver-button" onClick={textDriver} disabled={busy === "sms"}><MessageSquareText className="mr-2 h-4 w-4" />{busy === "sms" ? "Sending…" : "Text driver"}</Button>
-              <div className="flex gap-2">
-                <Button data-testid="load-copy-link-button" variant="outline" className="flex-1" onClick={copyLink}><Copy className="mr-2 h-4 w-4" />Copy link</Button>
-                <Button asChild variant="outline"><a data-testid="load-open-driver-link" href={`/d/${load.driver_token}`} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /></a></Button>
-              </div>
-            </div>
-            {!sms_configured && <p data-testid="sms-not-configured-note" className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-muted-foreground">Texting turns on once your Twilio account is connected. Until then, copy the link and send it yourself.</p>}
-            {lastSms && <p className="mt-3 text-xs text-muted-foreground">Last text: {fmtTime(lastSms.at, tz)} · {lastSms.sent ? "sent" : lastSms.reason?.replace("_", " ")}</p>}
-          </div>
+          <DriverEmailCard api={api} load={load} tz={tz} onChanged={refresh} />
 
           <div className="rounded-2xl border bg-card p-5 card-shadow">
             <h3 className="text-sm font-semibold">Rate con terms</h3>

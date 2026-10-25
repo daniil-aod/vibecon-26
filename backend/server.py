@@ -374,6 +374,7 @@ class StopIn(BaseModel):
 class DriverIn(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
+    email: Optional[str] = None
 
 
 class LoadIn(BaseModel):
@@ -582,6 +583,210 @@ async def text_driver(load_id: str, m: dict = Depends(fleet_member)):
     entry = {"at": iso(now_utc()), "to": drv["phone"], "by": m["user_id"], **res}
     await db.loads.update_one({"id": load_id}, {"$push": {"sms_log": entry}})
     return {**res, "driver_url": url}
+
+
+# ---------------------------------------------------------------- driver emails (link / recap, now or scheduled)
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+FREQS = ("once", "daily", "weekly", "monthly")
+KINDS = ("link", "recap")
+
+
+def _driver_link(fleet, load) -> str:
+    return f"{fleet['app_url']}/api/open/{load['driver_token']}"
+
+
+def _recap_window(freq: str):
+    now = now_utc()
+    return {"daily": now - timedelta(days=1), "weekly": now - timedelta(days=7),
+            "monthly": now - timedelta(days=31)}.get(freq)
+
+
+async def _recap_rows(fleet, load, freq: str):
+    """Stops for this driver: this load for one-time recaps, otherwise every load of the driver in the period."""
+    email = ((load.get("driver") or {}).get("email") or "").lower()
+    since = _recap_window(freq)
+    loads = [load]
+    if since and email:
+        loads = await db.loads.find({"fleet_id": fleet["id"], "driver.email": {"$regex": f"^{re.escape(email)}$", "$options": "i"},
+                                     "stops": {"$elemMatch": {"arrived_at": {"$gte": iso(since)}}}}, {"_id": 0}).to_list(500)
+    rows = []
+    for ld in sorted(loads, key=lambda x: x.get("created_at") or ""):
+        for s in sorted(ld.get("stops", []), key=lambda x: x.get("seq", 0)):
+            a, d = parse(s.get("arrived_at")), parse(s.get("departed_at"))
+            if not a or (since and a < since):
+                continue
+            wait = int(((d or now_utc()) - a).total_seconds() // 60)
+            rows.append({"load": ld.get("load_number"), "facility": s.get("facility_name"), "type": s.get("type"),
+                         "in": fmt_local(fleet, s.get("arrived_at")),
+                         "out": fmt_local(fleet, s.get("departed_at")) if d else "On site",
+                         "wait": f"{wait // 60}h {wait % 60:02d}m"})
+    return rows
+
+
+async def send_driver_email(fleet, load, kind: str, freq: str = "once", by: str | None = None) -> dict:
+    drv = load.get("driver") or {}
+    to = (drv.get("email") or "").strip()
+    if not EMAIL_RE.match(to):
+        return {"sent": False, "reason": "no_email", "detail": "Add the driver's email first"}
+    if not fleet.get("app_url"):
+        return {"sent": False, "reason": "no_app_url", "detail": "App address unknown yet; reload the page and try again"}
+    if kind == "link":
+        first = next((s for s in sorted(load.get("stops", []), key=lambda x: x.get("seq", 0)) if not s.get("departed_at")), None) \
+            or (load.get("stops") or [{}])[0]
+        subj, html = templates.driver_link_email(fleet["name"], drv.get("name") or "", load["load_number"],
+                                                 first.get("facility_name") or "", _driver_link(fleet, load))
+    else:
+        label = {"once": f"load {load['load_number']}", "daily": "the last day", "weekly": "the last 7 days",
+                 "monthly": "the last month"}[freq]
+        subj, html = templates.driver_recap_email(fleet["name"], drv.get("name") or "", label, await _recap_rows(fleet, load, freq))
+    entry = {"at": iso(now_utc()), "to": to, "kind": kind, "by": by}
+    try:
+        entry["email_id"] = await send_email(to=to, subject=subj, html=html, reply_to=fleet.get("reply_to_email"))
+        entry["sent"] = True
+    except (EmailError, ValueError) as e:
+        msg = str(e)
+        if "429" in msg or "rate" in msg.lower():
+            msg = "Email provider is busy (rate limited) — try again in a minute"
+        entry.update({"sent": False, "reason": "email_error", "detail": msg[:300]})
+    await db.loads.update_one({"id": load["id"]}, {"$push": {"email_log": entry}})
+    return entry
+
+
+class DriverEmailIn(BaseModel):
+    kind: str = "link"
+
+
+@api.post("/loads/{load_id}/email-driver")
+async def email_driver(load_id: str, body: DriverEmailIn, m: dict = Depends(fleet_member)):
+    if body.kind not in KINDS:
+        raise HTTPException(status_code=400, detail="Unknown email type")
+    load = await get_load(load_id, m["fleet_id"])
+    res = await send_driver_email(m["fleet"], load, body.kind, "once", m["user_id"])
+    if not res.get("sent") and res.get("reason") in ("no_email", "no_app_url"):
+        raise HTTPException(status_code=400, detail=res["detail"])
+    return {**res, "driver_url": _driver_link(m["fleet"], load) if m["fleet"].get("app_url") else None}
+
+
+def _add_month(d: datetime) -> datetime:
+    y, mo = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
+    import calendar
+    return d.replace(year=y, month=mo, day=min(d.day, calendar.monthrange(y, mo)[1]))
+
+
+def next_run(prev_utc: datetime, freq: str, fleet) -> datetime | None:
+    """Next send time, keeping the same local wall-clock time in the fleet's timezone."""
+    if freq == "once":
+        return None
+    local = prev_utc.astimezone(tz_of(fleet)).replace(tzinfo=None)
+    local = local + timedelta(days=1) if freq == "daily" else local + timedelta(days=7) if freq == "weekly" else _add_month(local)
+    return local.replace(tzinfo=tz_of(fleet)).astimezone(timezone.utc)
+
+
+class ScheduleIn(BaseModel):
+    kind: str
+    frequency: str
+    send_at: str  # ISO datetime (first send)
+
+
+def _sched_out(s):
+    return {k: s.get(k) for k in ("id", "load_id", "kind", "frequency", "send_at", "next_run_at", "active",
+                                   "last_sent_at", "last_result", "created_at")}
+
+
+@api.get("/loads/{load_id}/email-schedules")
+async def list_schedules(load_id: str, m: dict = Depends(fleet_member)):
+    await get_load(load_id, m["fleet_id"])
+    rows = await db.email_schedules.find({"fleet_id": m["fleet_id"], "load_id": load_id}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    return [_sched_out(s) for s in rows]
+
+
+@api.post("/loads/{load_id}/email-schedules")
+async def create_schedule(load_id: str, body: ScheduleIn, m: dict = Depends(fleet_member)):
+    load = await get_load(load_id, m["fleet_id"])
+    if body.kind not in KINDS or body.frequency not in FREQS:
+        raise HTTPException(status_code=400, detail="Pick what to send and how often")
+    if not EMAIL_RE.match(((load.get("driver") or {}).get("email") or "").strip()):
+        raise HTTPException(status_code=400, detail="Add the driver's email first")
+    try:
+        at = parse(body.send_at)
+    except ValueError:
+        at = None
+    if not at:
+        raise HTTPException(status_code=400, detail="Pick a valid send time")
+    if body.frequency == "once" and at < now_utc() - timedelta(minutes=1):
+        raise HTTPException(status_code=400, detail="Pick a time in the future")
+    s = {"id": uid(), "fleet_id": m["fleet_id"], "load_id": load_id, "kind": body.kind, "frequency": body.frequency,
+         "send_at": iso(at), "next_run_at": iso(at), "active": True, "last_sent_at": None, "last_result": None,
+         "created_by": m["user_id"], "created_at": iso(now_utc())}
+    await db.email_schedules.insert_one(dict(s))
+    return _sched_out(s)
+
+
+@api.delete("/email-schedules/{sid}")
+async def delete_schedule(sid: str, m: dict = Depends(fleet_member)):
+    r = await db.email_schedules.delete_one({"id": sid, "fleet_id": m["fleet_id"]})
+    if not r.deleted_count:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return {"ok": True}
+
+
+def occurrence(base_utc: datetime, freq: str, fleet, n: int) -> datetime | None:
+    """The n-th send after the first, always counted from the original send time (no drift),
+    at the same local wall-clock time in the fleet's timezone."""
+    if freq == "once":
+        return None
+    import calendar
+    tz = tz_of(fleet)
+    local = base_utc.astimezone(tz).replace(tzinfo=None)
+    if freq == "daily":
+        local = local + timedelta(days=n)
+    elif freq == "weekly":
+        local = local + timedelta(days=7 * n)
+    else:
+        mo = local.month - 1 + n
+        y, mo = local.year + mo // 12, mo % 12 + 1
+        local = local.replace(year=y, month=mo, day=min(local.day, calendar.monthrange(y, mo)[1]))
+    return local.replace(tzinfo=tz).astimezone(timezone.utc)
+
+
+TRANSIENT_RETRIES = 4
+
+
+async def run_schedules(fmap: dict):
+    now = now_utc()
+    due = await db.email_schedules.find({"active": True, "next_run_at": {"$lte": iso(now)}}, {"_id": 0}).to_list(1000)
+    for s in due:
+        fleet = fmap.get(s["fleet_id"])
+        load = await db.loads.find_one({"id": s["load_id"], "fleet_id": s["fleet_id"]}, {"_id": 0})
+        if not fleet or not load:
+            await db.email_schedules.update_one({"id": s["id"]}, {"$set": {"active": False, "last_result": "load_missing"}})
+            continue
+        runs = int(s.get("runs") or 0)
+        n = runs + 1
+        nxt = occurrence(parse(s["send_at"]), s["frequency"], fleet, n)
+        while nxt and nxt <= now:  # skip missed runs (e.g. server was down)
+            n += 1
+            nxt = occurrence(parse(s["send_at"]), s["frequency"], fleet, n)
+        # Claim this run first so overlapping ticks never double-send.
+        claim = await db.email_schedules.update_one(
+            {"id": s["id"], "active": True, "next_run_at": s["next_run_at"]},
+            {"$set": {"next_run_at": iso(nxt) if nxt else s["next_run_at"], "active": bool(nxt), "runs": n - 1 if nxt else runs}})
+        if not claim.modified_count:
+            continue
+        try:
+            res = await send_driver_email(fleet, load, s["kind"], s["frequency"], "schedule")
+        except Exception as e:  # noqa
+            res = {"sent": False, "reason": "error", "detail": str(e)[:200]}
+        upd = {"last_sent_at": iso(now_utc()), "last_result": "sent" if res.get("sent") else (res.get("detail") or res.get("reason"))}
+        retries = int(s.get("retries") or 0)
+        if res.get("sent"):
+            upd["retries"] = 0
+        elif res.get("reason") not in ("no_email", "no_app_url") and retries < TRANSIENT_RETRIES:
+            # Temporary failure (e.g. provider rate limit): undo the claim and retry in ~15 minutes.
+            upd.update({"active": True, "runs": runs, "retries": retries + 1,
+                        "next_run_at": iso(now_utc() + timedelta(minutes=15)), "last_result": f"retrying: {upd['last_result']}"})
+        await db.email_schedules.update_one({"id": s["id"]}, {"$set": upd})
 
 
 class AdjustIn(BaseModel):
@@ -1482,6 +1687,7 @@ async def run_tick():
     for f in fleets:
         await run_reminders(f)
         await run_weekly(f)
+    await run_schedules(fmap)
 
 
 @api.post("/cron/tick")
@@ -1550,6 +1756,8 @@ async def startup():
     await db.loads.create_index("id", unique=True)
     await db.loads.create_index("driver_token", unique=True)
     await db.loads.create_index("fleet_id")
+    await db.email_schedules.create_index([("active", 1), ("next_run_at", 1)])
+    await db.email_schedules.create_index("load_id")
     await db.invoices.create_index("public_token", unique=True)
     await db.invoices.create_index("fleet_id")
     await db.pings.create_index([("load_id", 1), ("ts", 1)])

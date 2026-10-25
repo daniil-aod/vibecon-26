@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Mail, Trash2, MessageSquareText, CheckCircle2, XCircle } from "lucide-react";
+import { Mail, Trash2, MessageSquareText, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +12,7 @@ import { TIMEZONES, fmtTime } from "@/lib/format";
 
 export default function Settings() {
   const api = useApi();
-  const { fleet, user, sms_configured, refresh } = useFleet();
+  const { fleet, user, refresh } = useFleet();
   const owner = user?.role === "owner";
   const [f, setF] = useState({ name: fleet.name, timezone: fleet.timezone, reply_to_email: fleet.reply_to_email || "", notice_mode: fleet.notice_mode || "auto" });
   const [team, setTeam] = useState({ members: [], invites: [] });
@@ -65,8 +65,8 @@ export default function Settings() {
         <div className="mt-4 space-y-3 text-sm">
           <div data-testid="settings-sms-status" className="flex items-start gap-3 rounded-xl border p-4">
             <MessageSquareText className="mt-0.5 h-4 w-4" />
-            <div className="flex-1"><div className="font-medium">Driver texts</div><div className="text-xs text-muted-foreground">{sms_configured ? "Connected to your Twilio number." : "Not connected yet. Drivers' links can be copied and sent by hand until your Twilio account is added."}</div></div>
-            {sms_configured ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <XCircle className="h-5 w-5 text-slate-400" />}
+            <div className="flex-1"><div className="font-medium">Driver emails</div><div className="text-xs text-muted-foreground">Driver app links and dock-time recaps are emailed from DockClock — send them now or on a schedule from each load.</div></div>
+            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
           </div>
           <div className="flex items-start gap-3 rounded-xl border p-4"><Mail className="mt-0.5 h-4 w-4" /><div className="flex-1"><div className="font-medium">Monday summary email</div>
             <div className="text-xs text-muted-foreground">Sent to the owner every Monday at 7am {fleet.timezone}. {fleet.weekly_sent_at ? `Last sent ${fmtTime(fleet.weekly_sent_at, fleet.timezone)}.` : ""}</div></div>

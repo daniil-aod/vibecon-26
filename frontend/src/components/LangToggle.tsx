@@ -18,7 +18,7 @@ export function LangToggle() {
 
 const styles = StyleSheet.create({
   wrap: { flexDirection: "row", borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, padding: 2 },
-  opt: { minWidth: 40, height: 32, alignItems: "center", justifyContent: "center", borderRadius: radius.pill },
+  opt: { minWidth: 44, height: 44, alignItems: "center", justifyContent: "center", borderRadius: radius.pill },
   on: { backgroundColor: colors.slate900 },
   t: { fontFamily: fonts.monoSemi, fontSize: 12, color: colors.mutedForeground },
   tOn: { color: colors.primaryForeground },

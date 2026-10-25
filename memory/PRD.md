@@ -48,3 +48,11 @@ End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads 
 - Store links skipped (proof of concept on the owner's own phone).
 - Tested: iteration_5 — 24/24 backend, frontend EN/ES + offline queue pass; duplicate-point & dropped-fix issues fixed after.
 
+## 2026-06 — Round 3
+- Email instead of SMS: driver.email on loads; web LoadDetail "Driver app link" card (DriverEmailCard.js) to email the app link or a dock-time recap now, or on a schedule (one time / daily / weekly / monthly). Texting UI removed.
+- Backend: POST /api/loads/{id}/email-driver, GET/POST /api/loads/{id}/email-schedules, DELETE /api/email-schedules/{sid}; run_schedules() in the 15-min cron. Occurrences are counted from the original send time in the fleet's timezone (no drift). Each run is claimed atomically; temporary failures retry every 15 min, up to 4 times.
+- Expo: trip summary after delivery (in/out/wait per stop + total), EN/ES.
+- Tested: iteration_6 (20/20 new + 24/24 regression); retry and no-drift fixes applied afterwards.
+- Note: the web dashboard changes in /app/web go live only when the web app is republished.
+
+

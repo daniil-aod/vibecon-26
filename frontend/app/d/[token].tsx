@@ -14,6 +14,7 @@ import { ApiError, driverApi, DriverPayload, errMsg, Fix, recallApi, rememberApi
 import { getTrip, on, queuedCount, flushQueue, resumeTracking, startTracking, stopTracking, TrackingMode } from "@/src/lib/tracking";
 import { useI18n } from "@/src/lib/i18n";
 import { LangToggle } from "@/src/components/LangToggle";
+import { TripSummary } from "@/src/components/TripSummary";
 import { backgroundState, ensureForeground, ensurePrecise, isPrecise, LocIssue, requestBackground } from "@/src/lib/permissions";
 import { clock, dist, fmtClock, hrs } from "@/src/lib/format";
 import { colors, fonts, radius, spacing } from "@/src/theme";
@@ -311,10 +312,13 @@ export default function DriverScreen() {
             </View>
           </View>
         ) : (
-          <View style={[styles.section, { alignItems: "center" }]} testID="driver-all-done">
-            <Lucide name="circle-check" size={48} color={colors.successStrong} />
-            <Text style={[styles.facility, { marginTop: spacing.md }]}>{L.allDone}</Text>
-            <Text style={styles.muted}>{L.allDoneP}</Text>
+          <View style={styles.section} testID="driver-all-done">
+            <View style={{ alignItems: "center" }}>
+              <Lucide name="circle-check" size={48} color={colors.successStrong} />
+              <Text style={[styles.facility, { marginTop: spacing.md }]}>{L.allDone}</Text>
+              <Text style={styles.muted}>{L.allDoneP}</Text>
+            </View>
+            <TripSummary stops={stops} />
           </View>
         )}
 

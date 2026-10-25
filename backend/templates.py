@@ -103,6 +103,35 @@ def invite_email(fleet_name, inviter, app_url):
     return title, _wrap(title, inner, fleet_name)
 
 
+def driver_link_email(fleet_name, driver_name, load_number, facility, url):
+    title = f"Your load {load_number} is ready"
+    hi = f"Hi {escape(driver_name)}," if driver_name else "Hi,"
+    inner = (f'<p style="font-size:15px;line-height:1.6">{hi} your load <strong>{escape(load_number)}</strong>'
+             f'{" to " + escape(facility) if facility else ""} is ready in the DockClock Driver app.</p>'
+             '<p style="font-size:15px;line-height:1.6">Open this email on your phone, tap the button, then press '
+             '<strong>Start trip</strong>. Your dock arrival and departure are stamped automatically until delivery.</p>'
+             + _btn(url, "Open in DockClock Driver")
+             + '<p style="font-size:13px;color:#64748b">Don\'t have the app yet? The button shows you how to install it.</p>')
+    return title, _wrap(title, inner, fleet_name)
+
+
+def driver_recap_email(fleet_name, driver_name, period_label, rows):
+    title = f"Your dock times for {period_label}"
+    hi = f"Hi {escape(driver_name)}," if driver_name else "Hi,"
+    if rows:
+        head = "".join(f'<th style="text-align:left;padding:6px 8px;font-size:12px;color:#64748b">{h}</th>'
+                       for h in ("Load", "Stop", "In", "Out", "Wait"))
+        body = "".join(
+            '<tr>' + "".join(f'<td style="padding:6px 8px;font-size:13px;border-top:1px solid #e2e8f0">{escape(str(v or ""))}</td>'
+                             for v in (r["load"], r["facility"], r["in"], r["out"], r["wait"])) + '</tr>' for r in rows)
+        table = f'<table role="presentation" width="100%" style="border-collapse:collapse"><tr>{head}</tr>{body}</table>'
+    else:
+        table = '<p style="font-size:14px;color:#64748b">No dock stops were recorded in this period.</p>'
+    inner = (f'<p style="font-size:15px;line-height:1.6">{hi} here are your recorded dock times for '
+             f'{escape(period_label)}.</p>{table}')
+    return title, _wrap(title, inner, fleet_name)
+
+
 
 def driver_open_page(valid: bool, load_number: str, driver_name: str, deep_link: str, intent_link: str,
                      ios_url: str, android_url: str) -> str:

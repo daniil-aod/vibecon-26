@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 6: driver emails (link/recap), email schedules, next_run, auth guards, Expo trip summary, and web compile. Backend: new suite tests/test_driver_emails.py has 20 tests that call the server code directly (motor bound to the test loop) plus HTTP auth checks. All 20 passed on the first run: link and weekly-recap emails were really sent to delivered+dc*@resend.dev with sent=True and email_log entries. run_schedules was verified: a once schedule becomes inactive; daily (3 days overdue) skips missed runs and lands within the next 24h; weekly and monthly advance to the same local time in the fleet timezone; a schedule whose load is missing becomes inactive with load_missing; a future schedule is untouched; a second immediate call sends nothing; email_log gets 4 entries with by=schedule. next_run passes the DST spring-forward and fall-back cases, Jan31->Feb28 and Dec->Jan. The templates pass emailer._assert_safe_email and HTML is escaped. Without auth, email-driver, email-schedules GET/POST and the schedule DELETE all return 401/403, and cron/tick without the secret returns 401. Regression: 24/24 in test_driver_app.py and test_offline_ping.py pass, and /api/open/{tok} returns 200. Later runs: the email provider returned 429 rate_limited for every send, also to a fresh address, even after waiting 60s, so it is a global limit. That exposed a real issue: a once schedule is used up and goes inactive when its send fails (the email is lost). Frontend (Expo web at 375x667): the completed demo load APX-30277 shows driver-all-done and trip-summary with stop-0 and the total (3h 00m). The ES toggle shows 'Resumen del viaje'/Entrada/Salida/Espera/'Tiempo total en muelles'. A 2-stop TEST_ load shows stop-1 and the correct sum (4h 25m); a long facility name is cut off cleanly. Web: LoadDetail.js, DriverEmailCard.js, Settings.js and LoadForm.js compile with esbuild. DriverEmailCard uses the endpoints correctly. No deprecated Expo packages were found in the new code.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "run_schedules (cron tick)", "issue": "The run is claimed before sending. If the send fails (429 rate_limited, 5xx, network), a 'once' schedule still becomes inactive and the email is never retried. Recurring schedules skip that period. The schedule row only shows 'Done (Failed to send email)'. Reproduced with the provider returning 429."},
+      {"endpoint": "emailer.send_email", "issue": "A 429 {code:'rate_limited'} is turned into the generic 'Failed to send email', so email_log/last_result never says the provider rate-limited the send. Schedules also send in a tight loop with no throttling, and the provider limit was hit after about 6 sends."},
+      {"endpoint": "next_run monthly", "issue": "Each run is computed from the previous run, not the original day: Jan31 -> Feb28 -> Mar28 -> Apr28. The day stays at 28 after the first clamp."},
+      {"endpoint": "next_run DST gap", "issue": "A daily schedule at 2:30 AM Chicago on Mar 7 goes to 03:30 CDT on Mar 8 (2:30 does not exist that day) and then stays at 3:30 for every later run. Computing from an anchor (send_at local time) fixes both drift issues."},
+      {"endpoint": "run_schedules claim filter", "issue": "The claim filter is {id, next_run_at} without active:True. For 'once' schedules, protection against double sends only works because Mongo reports modified_count=0 when a second claim sets the same values. Add active:True to the filter so this is explicit."},
+      {"endpoint": "LoadIn/DriverIn.email", "issue": "The driver email is not validated when a load is saved (Optional[str]). An invalid email is only caught later at send or schedule time."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Driver all-done / TripSummary", "issues": ["Times show the clock only (fmtClock) with no date. Stops on different days, or a stay past midnight (11:01 PM -> 12:26 AM), are ambiguous. Consider adding a short date when the day changes.", "The language toggle buttons (lang-es-button) are 40x32, below the 44pt minimum touch target."]},
+      {"screen": "Web DriverEmailCard", "issues": ["The time you pick is in the browser's local time, but 'Next: ...' is shown in the fleet timezone and repeats follow fleet-timezone wall-clock time. This is confusing when the dispatcher's computer is in a different zone.", "Settings still uses testID settings-sms-status and a MessageSquareText icon for the 'Driver emails' row (leftover naming)."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_driver_emails.py", "/app/test_reports/pytest/pytest_driver_emails.xml"],
+  "action_items": [
+    "In run_schedules, when the send fails for a temporary reason (EmailError from 429/5xx), keep 'once' schedules active, or set next_run_at to now+15min with a retry count. Do not deactivate them.",
+    "Map the emailer 429 'rate_limited' response to a clear message (e.g. 'Email rate limited, will retry'). Consider spacing out or limiting sends inside run_schedules.",
+    "Compute next_run from an anchor (the original send_at local day and time) so monthly day-31 and DST-gap times do not drift for good.",
+    "Add active:True to the claim filter in run_schedules.",
+    "Optional: validate driver.email format when a load is created or updated; show a date in TripSummary for multi-day trips; make the lang toggle at least 44pt; rename settings-sms-status."
+  ],
+  "critical_code_review_comments": [
+    "send_driver_email: catching EmailError/ValueError is fine. Non-EmailError exceptions can't happen because send_email wraps them all.",
+    "_recap_rows matches loads with an escaped, case-insensitive regex on driver.email. Correct, but it cannot use an index; acceptable at this size.",
+    "server.py is 1740 lines, well over the 700-line guideline. The driver-email and schedule code (around 170 lines) could be moved into its own module."
+  ],
+  "updated_files": ["/app/backend/tests/test_driver_emails.py"],
+  "success_rate": {"backend": "100% on the first run (20/20) plus 24/24 regression. Later reruns failed 2 tests only because of the provider's 429 rate limit", "frontend": "100% (trip summary EN/ES, single and multi-stop)"},
+  "flaky_tests": ["test_driver_emails.py::TestSendDriverEmail::test_link and test_recap_send fail with provider 429 rate_limited on quick reruns (passed on the first run)"],
+  "seed_data_creation": "TEST_ loads/schedules were created at runtime and deleted afterwards (verified: 0 TEST_ loads, 0 schedules left).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "tests/test_driver_emails.py imports server, sets asyncio.set_event_loop(loop) and replaces server.db with a motor client bound to that loop (otherwise you get 'future belongs to a different loop'). pytest.ini uses xdist; use -n 0 for serial runs with -s. The email provider rate-limits globally after about 6 quick sends (429 rate_limited); rerunning the send tests within minutes will fail. Use delivered+label@resend.dev as the test recipient. Demo fleet timezone is America/Chicago, and app_url is the load-locator-4 host.",
+  "rca_of_issue": "Lost 'once' emails: run_schedules sets active=bool(nxt), which is False for once, in the claim update before calling send_driver_email. The result is written only to last_result, so any send failure permanently consumes the schedule. Repro: insert a once schedule with next_run_at in the past while the provider returns 429 and call run_schedules. You get active=False with last_result='Failed to send email'. Fix: on a failed send, reactivate the schedule with a retry time."
+}

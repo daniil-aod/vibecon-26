@@ -105,6 +105,9 @@ const en = {
   fgTitle: "DockClock is tracking this load",
   fgBody: "Your dock arrival and departure are stamped automatically.",
   you: "You",
+  tripSummary: "Trip summary",
+  waitTime: "Wait",
+  totalWait: "Total time at docks",
   mapInApp: "Live map shows in the phone app",
 };
 
@@ -208,6 +211,9 @@ const es: Dict = {
   fgTitle: "DockClock está rastreando esta carga",
   fgBody: "Tu llegada y salida del muelle se registran automáticamente.",
   you: "Tú",
+  tripSummary: "Resumen del viaje",
+  waitTime: "Espera",
+  totalWait: "Tiempo total en muelles",
   mapInApp: "El mapa en vivo se ve en la app del teléfono",
 };
 

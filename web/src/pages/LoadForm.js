@@ -13,7 +13,7 @@ export const emptyLoad = () => ({
   detention: { free_time_hours: 2, hourly_rate: null, billing_increment_minutes: 15, cap_amount: null, cap_scope: "per_stop",
     notice_after_arrival_minutes: null, notice_before_expiry_minutes: null, notice_rule_text: "", requires_signed_bol: true, clause_text: "" },
   stops: [{ type: "pickup", facility_name: "", address: "", appointment: "" }, { type: "delivery", facility_name: "", address: "", appointment: "" }],
-  driver: { name: "", phone: "" }, low_confidence: [],
+  driver: { name: "", phone: "", email: "" }, low_confidence: [],
 });
 
 export const fromExtracted = (x) => {
@@ -101,6 +101,7 @@ export default function LoadForm({ value: v, onChange, showDriver = true }) {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <F label="Driver name" path="driver.name" lc={[]}><Input data-testid="form-driver-name-input" value={v.driver.name || ""} onChange={(e) => set({ driver: { ...v.driver, name: e.target.value } })} /></F>
             <F label="Driver mobile" path="driver.phone" lc={[]} hint="US numbers can be 10 digits"><Input data-testid="form-driver-phone-input" type="tel" value={v.driver.phone || ""} onChange={(e) => set({ driver: { ...v.driver, phone: e.target.value } })} /></F>
+            <F label="Driver email" path="driver.email" lc={[]} hint="The app link and dock-time recaps are emailed here"><Input data-testid="form-driver-email-input" type="email" value={v.driver.email || ""} onChange={(e) => set({ driver: { ...v.driver, email: e.target.value } })} /></F>
           </div>
         </section>
       )}
