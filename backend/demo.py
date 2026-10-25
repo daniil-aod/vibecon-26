@@ -417,7 +417,8 @@ class _Seeder:
                 "linehaul_amount": linehaul,
                 "broker": {"name": bdoc["name"], "contact_name": bdoc["contact_name"], "email": bdoc["email"], "phone": bdoc["phone"]},
                 "broker_id": self.broker_id(broker_key), "detention": det, "stops": [s for s, _ in stops],
-                "driver": driver, "driver_token": _tok(), "ratecon_file_id": ratecon_file_id,
+                "driver": driver, "driver_token": hashlib.sha256(f"demo-driver:{self.fid}:{load_number}".encode()).hexdigest()[:40],
+                "ratecon_file_id": ratecon_file_id,
                 "low_confidence": [], "sms_log": [], "status": status,
                 "created_by": "demo", "created_at": iso(now_utc()),
                 "updated_at": iso(now_utc())}

@@ -33,7 +33,7 @@ export default function Home() {
     const p = parseLink(value);
     if (!p) { setErr(L.linkBad); return; }
     setErr(null);
-    router.push({ pathname: "/d/[token]", params: p.api ? { token: p.token, api: p.api } : { token: p.token } });
+    router.replace({ pathname: "/d/[token]", params: p.api ? { token: p.token, api: p.api } : { token: p.token } });
   };
 
   const paste = async () => {

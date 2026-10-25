@@ -11,7 +11,7 @@ export function FacilityMap({ stop, truck, height = 200, testID }: { stop: Stop;
     <View style={[styles.wrap, { height }]} testID={testID}>
       <Lucide name="map-pin" size={28} color={colors.accent} />
       <Text style={styles.t}>{stop.facility_name}</Text>
-      <Text style={styles.s}>{truck ? `${t("you")}: ${truck.lat.toFixed(5)}, ${truck.lng.toFixed(5)}` : t("mapInApp")}</Text>
+      <Text style={styles.s}>{truck ? `${t.you}: ${truck.lat.toFixed(5)}, ${truck.lng.toFixed(5)}` : t.mapInApp}</Text>
     </View>
   );
 }

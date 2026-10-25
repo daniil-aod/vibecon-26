@@ -1,0 +1,25 @@
+{
+  "summary": "Retested the FacilityMap.web.tsx 't is not a function' fix on web at 390x844. I ran the user's exact flow: open '/', paste the /api/open/<token> link into home-link-input, tap home-open-button. The driver screen renders with no uncaught errors and no console errors. The driver-map placeholder shows 'Live map shows in the phone app' in EN and 'El mapa en vivo se ve en la app del teléfono' in ES. With geolocation granted and Start trip tapped, it shows 'You: 34.04905, -117.43502' in EN and 'Tú: 34.04905, -117.43502' in ES. The same results hold on the alias host load-locator-4.preview.emergentagent.com, both with an e38 link (api param points to e38) and with an alias-host link. The fix is verified.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "The user's demo link with token b8dbdcc3c583433bb0183c525f4ab4f52d74b231 is no longer valid. GET /api/open and GET /api/driver both return 404. During testing the agent called POST /api/demo/reseed (it had accidentally auto-departed the demo load), and the reseed gave RL-55018 a new driver token: 30d3b1bb69c54e55b5cbe4f96f79b7fcf96e0009. Give the user the new link, or make demo driver tokens deterministic so a reseed (which also runs from cron) does not break shared links.",
+    "Low priority: on web, lang-*-button exists twice in the DOM because the Home screen stays mounted under /d/[token] after router.push. Tests must select the visible one with :visible. Consider router.replace if the home screen should not stay in the stack."
+  ],
+  "critical_code_review_comments": [
+    "FacilityMap.web.tsx now uses t.you and t.mapInApp. Both keys exist in the EN and ES dicts (i18n.ts lines 107/111 and 213/217). No other component destructures { t } from useI18n() and calls it as a function."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "100%"},
+  "seed_data_creation": "Called POST /api/demo/reseed once to restore the demo fleet. A test geolocation about 4.8 km from Fontana had auto-departed RL-55018 and completed the load. New RL-55018 token: 30d3b1bb69c54e55b5cbe4f96f79b7fcf96e0009. RL-55018 has now been started on web twice, each time inside the geofence (34.04905,-117.43502), so it stays on_site.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Demo tokens change on every reseed. Look them up with db.loads.find({fleet_id:'demo-dockclock-fleet'}). Facility coordinates for RL-55018 (Fontana) are 34.0490,-117.4350 with radius_m 300. Set the Playwright geolocation inside that radius, or tapping Start trip will auto-depart the load and complete it. Use the :visible selector for lang buttons on the driver screen.",
+  "rca_of_issue": "useI18n() returns { t: dicts[lang] }, an object, but FacilityMap.web.tsx called t('you') as a function. That threw 't is not a function' as soon as the driver screen rendered the map on web. The fix uses property access (t.you / t.mapInApp) and is verified."
+}
