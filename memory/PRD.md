@@ -40,3 +40,11 @@ End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads 
 - Built: home (resume trip / paste link), /d/[token] driver screen (Start trip, geofence auto-stamps, manual taps, BOL camera/gallery, OSM map WebView), background location task with Android foreground service, precise-location prompts, permission cards with Open Settings.
 - Tested: iteration_4 — 13/13 backend, all frontend web flows pass.
 - Backlog: P0 publish + native build to verify background/precise on real phones; set DRIVER_APP_IOS_URL / DRIVER_APP_ANDROID_URL; add the production web domain to EXPO_PUBLIC_EXTRA_API_HOSTS. P1 Twilio real SMS (pending); Spanish driver UI. P2 offline ping queue.
+
+## 2026-06 — Round 2
+- Offline ping backup: points queued on the phone with GPS time, sent oldest-first (on next fix, every 15s, and on app foreground). Backend honors ping ts (≤24h old, not future); departure only after arrival; last_ping only moves forward.
+- Spanish driver screens: EN/ES toggle on home + driver screen, English by default, choice saved.
+- Twilio: manual "Text driver" only (user choice); waiting on TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER.
+- Store links skipped (proof of concept on the owner's own phone).
+- Tested: iteration_5 — 24/24 backend, frontend EN/ES + offline queue pass; duplicate-point & dropped-fix issues fixed after.
+

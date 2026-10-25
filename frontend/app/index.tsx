@@ -10,11 +10,14 @@ import { Logo } from "@/src/components/Logo";
 import { PressButton } from "@/src/components/PressButton";
 import { getTrip } from "@/src/lib/tracking";
 import { parseLink } from "@/src/lib/api";
+import { useI18n } from "@/src/lib/i18n";
+import { LangToggle } from "@/src/components/LangToggle";
 import { colors, fonts, radius, spacing } from "@/src/theme";
 
 export default function Home() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { t: L } = useI18n();
   const [checking, setChecking] = useState(true);
   const [link, setLink] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -28,7 +31,7 @@ export default function Home() {
 
   const open = (value = link) => {
     const p = parseLink(value);
-    if (!p) { setErr("That doesn't look like a DockClock driver link."); return; }
+    if (!p) { setErr(L.linkBad); return; }
     setErr(null);
     router.push({ pathname: "/d/[token]", params: p.api ? { token: p.token, api: p.api } : { token: p.token } });
   };
@@ -37,34 +40,34 @@ export default function Home() {
     try {
       const t = await Clipboard.getStringAsync();
       if (t) { setLink(t); open(t); }
-    } catch { setErr("Couldn't read the clipboard — paste the link into the box."); }
+    } catch { setErr(L.clipFail); }
   };
 
   if (checking) return <View style={styles.center}><ActivityIndicator color={colors.slate900} /></View>;
 
   return (
     <View style={styles.root}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}><Logo /></View>
+      <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}><Logo /><LangToggle /></View>
       <KeyboardAwareScrollView bottomOffset={24} contentContainerStyle={[styles.body, { paddingBottom: insets.bottom + spacing.xl }]} keyboardShouldPersistTaps="handled">
         <Animated.View entering={FadeInDown.duration(400)}>
-          <Text style={styles.kicker}>Driver app</Text>
-          <Text style={styles.h1} testID="home-title">No load open yet</Text>
-          <Text style={styles.p}>Tap the link your dispatcher texted you — it opens your load right here. Then press <Text style={styles.b}>Start trip</Text> once and you're done until delivery.</Text>
+          <Text style={styles.kicker}>{L.homeKicker}</Text>
+          <Text style={styles.h1} testID="home-title">{L.homeTitle}</Text>
+          <Text style={styles.p}>{L.homeBody1}<Text style={styles.b}>{L.startTrip}</Text>{L.homeBody2}</Text>
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(120).duration(400)} style={styles.card}>
-          <View style={styles.step}><View style={styles.num}><Text style={styles.numT}>1</Text></View><Text style={styles.stepT}>Open the text from your dispatcher</Text></View>
-          <View style={styles.step}><View style={styles.num}><Text style={styles.numT}>2</Text></View><Text style={styles.stepT}>Tap the DockClock link</Text></View>
-          <View style={styles.step}><View style={styles.num}><Text style={styles.numT}>3</Text></View><Text style={styles.stepT}>Press Start trip and drive</Text></View>
+          <View style={styles.step}><View style={styles.num}><Text style={styles.numT}>1</Text></View><Text style={styles.stepT}>{L.step1}</Text></View>
+          <View style={styles.step}><View style={styles.num}><Text style={styles.numT}>2</Text></View><Text style={styles.stepT}>{L.step2}</Text></View>
+          <View style={styles.step}><View style={styles.num}><Text style={styles.numT}>3</Text></View><Text style={styles.stepT}>{L.step3}</Text></View>
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(220).duration(400)} style={styles.paste}>
-          <Text style={styles.label}>Link didn't open the app?</Text>
+          <Text style={styles.label}>{L.linkLabel}</Text>
           <TextInput
             testID="home-link-input"
             value={link}
             onChangeText={(v) => { setLink(v); setErr(null); }}
-            placeholder="Paste your driver link"
+            placeholder={L.linkPlaceholder}
             placeholderTextColor={colors.slate400}
             autoCapitalize="none"
             autoCorrect={false}
@@ -74,14 +77,14 @@ export default function Home() {
           />
           {err && <Text style={styles.err} testID="home-link-error">{err}</Text>}
           <View style={styles.row}>
-            <PressButton testID="home-paste-button" size="md" label="Paste" icon="clipboard-paste" onPress={paste} bg={colors.surface} fg={colors.slate900} border={colors.slate900} style={{ flex: 1 }} />
-            <PressButton testID="home-open-button" size="md" label="Open load" icon="link" onPress={() => open()} bg={colors.primary} fg={colors.primaryForeground} style={{ flex: 1 }} />
+            <PressButton testID="home-paste-button" size="md" label={L.paste} icon="clipboard-paste" onPress={paste} bg={colors.surface} fg={colors.slate900} border={colors.slate900} style={{ flex: 1 }} />
+            <PressButton testID="home-open-button" size="md" label={L.openLoad} icon="link" onPress={() => open()} bg={colors.primary} fg={colors.primaryForeground} style={{ flex: 1 }} />
           </View>
         </Animated.View>
 
         <View style={styles.note}>
           <Lucide name="lock" size={14} color={colors.mutedForeground} />
-          <Text style={styles.noteT}>Location is only shared while a load is open and stops after delivery.</Text>
+          <Text style={styles.noteT}>{L.privacy}</Text>
         </View>
       </KeyboardAwareScrollView>
     </View>
@@ -91,7 +94,7 @@ export default function Home() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
   center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
-  header: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.surface },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: spacing.lg, paddingBottom: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.surface },
   body: { padding: spacing.lg, gap: spacing.xl },
   kicker: { fontFamily: fonts.bodySemi, fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase", color: colors.mutedForeground },
   h1: { fontFamily: fonts.display, fontSize: 30, color: colors.slate900, marginTop: spacing.xs, letterSpacing: -0.5 },

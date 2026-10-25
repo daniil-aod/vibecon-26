@@ -6,6 +6,7 @@ import storage from "@/src/utils/storage";
 import { colors } from "@/src/theme";
 import { ApiError, driverApi, DriverPayload, Fix } from "./api";
 import { dist } from "./format";
+import { t } from "./i18n";
 
 export const LOCATION_TASK = "dockclock-driver-location";
 const TRIP_KEY = "dockclock.trip";
@@ -15,9 +16,9 @@ const PING_MOVE_M = 25;
 export type Trip = { token: string; api: string; startedAt: string; mode: TrackingMode };
 export type TrackingMode = "background" | "foreground";
 
-type Events = { fix: Fix; payload: DriverPayload; stopped: { reason: string } };
+type Events = { fix: Fix; payload: DriverPayload; stopped: { reason: string }; queue: number };
 type Listener<K extends keyof Events> = (v: Events[K]) => void;
-const listeners: { [K in keyof Events]: Set<Listener<K>> } = { fix: new Set(), payload: new Set(), stopped: new Set() };
+const listeners: { [K in keyof Events]: Set<Listener<K>> } = { fix: new Set(), payload: new Set(), stopped: new Set(), queue: new Set() };
 export function on<K extends keyof Events>(k: K, fn: Listener<K>) {
   listeners[k].add(fn);
   return () => { listeners[k].delete(fn); };
@@ -37,22 +38,58 @@ export async function getTrip(): Promise<Trip | null> {
 
 const allDone = (p: DriverPayload) => p.stops.length > 0 && p.stops.every((s) => !!s.departed_at);
 
-async function handleFix(loc: Location.LocationObject) {
-  const fix: Fix = { lat: loc.coords.latitude, lng: loc.coords.longitude, accuracy: loc.coords.accuracy ?? 50 };
-  emit("fix", fix);
+// ---- Offline backup: GPS points taken without signal are saved on the phone (with their real time)
+// and sent in order once coverage returns, so no evidence is lost.
+const QUEUE_KEY = "dockclock.queue";
+const QUEUE_MAX = 5000;
+let queue: Fix[] | null = null;
+async function loadQueue() { if (!queue) queue = (await storage.getJSON<Fix[]>(QUEUE_KEY)) || []; return queue; }
+async function saveQueue() { await storage.setJSON(QUEUE_KEY, queue || []); emit("queue", (queue || []).length); }
+export async function queuedCount() { return (await loadQueue()).length; }
+
+/** Sends saved points oldest-first. Returns false if still offline. */
+async function flush(t: Trip): Promise<boolean> {
+  const q = await loadQueue();
+  while (q.length) {
+    try {
+      const data = await driverApi.ping(t.api, t.token, q[0]);
+      q.shift();
+      emit("payload", data);
+      if (allDone(data)) { await saveQueue(); await stopTracking("delivered"); return true; }
+    } catch (e) {
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 404 && e.status !== 408 && e.status !== 429) { q.shift(); continue; }
+      await saveQueue();
+      if (e instanceof ApiError && e.status === 404) await stopTracking("invalid");
+      return false;
+    }
+  }
+  await saveQueue();
+  return true;
+}
+
+export async function flushQueue() {
   const t = await getTrip();
   if (!t || inFlight) return;
+  inFlight = true;
+  try { await flush(t); } finally { inFlight = false; }
+}
+
+async function handleFix(loc: Location.LocationObject) {
+  const fix: Fix = { lat: loc.coords.latitude, lng: loc.coords.longitude, accuracy: loc.coords.accuracy ?? 50, ts: new Date(loc.timestamp || Date.now()).toISOString() };
+  emit("fix", fix);
+  const t = await getTrip();
+  if (!t) return;
   const moved = last.lat == null ? Infinity : dist({ lat: last.lat, lng: last.lng as number }, fix);
   if (Date.now() - last.t < PING_EVERY_MS && moved < PING_MOVE_M) return;
-  inFlight = true;
+  const q = await loadQueue();
+  if (q.length && q[q.length - 1].ts === fix.ts) return; // same GPS point re-delivered (e.g. after resume)
   last = { t: Date.now(), lat: fix.lat, lng: fix.lng };
+  q.push(fix);
+  if (q.length > QUEUE_MAX) q.splice(0, q.length - QUEUE_MAX);
+  if (inFlight) { await saveQueue(); return; } // a send is running; it will pick this point up
+  inFlight = true;
   try {
-    const data = await driverApi.ping(t.api, t.token, fix);
-    emit("payload", data);
-    if (allDone(data)) await stopTracking("delivered");
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) await stopTracking("invalid");
-    else last.t = 0; // retry on next fix when offline
+    await flush(t);
   } finally {
     inFlight = false;
   }
@@ -87,8 +124,8 @@ async function startBackground() {
     pausesUpdatesAutomatically: false,
     showsBackgroundLocationIndicator: true,
     foregroundService: {
-      notificationTitle: "DockClock is tracking this load",
-      notificationBody: "Your dock arrival and departure are stamped automatically.",
+      notificationTitle: t("fgTitle"),
+      notificationBody: t("fgBody"),
       notificationColor: colors.accent,
       killServiceOnDestroy: false,
     },
@@ -106,6 +143,8 @@ async function startForeground() {
 
 /** Starts GPS tracking for a load. Prefers OS-managed background updates; falls back to on-screen tracking. */
 export async function startTracking(token: string, api: string): Promise<TrackingMode> {
+  const prev = await getTrip();
+  if (prev && prev.token !== token) { queue = []; await saveQueue(); } // never send one load's saved points to another
   let mode: TrackingMode = "foreground";
   if (await backgroundAllowed()) {
     try { await startBackground(); mode = "background"; } catch { mode = "foreground"; }
@@ -139,6 +178,9 @@ export async function stopTracking(reason = "stopped") {
     } catch {}
   }
   trip = null;
+  queue = [];
+  await storage.removeItem(QUEUE_KEY);
   await storage.removeItem(TRIP_KEY);
+  emit("queue", 0);
   emit("stopped", { reason });
 }

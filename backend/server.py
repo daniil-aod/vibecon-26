@@ -862,6 +862,22 @@ class PingIn(BaseModel):
     ts: Optional[str] = None
 
 
+def _ping_time(raw: Optional[str]) -> datetime:
+    """Use the phone's GPS time for points saved offline (up to 24h old); otherwise server time."""
+    now = now_utc()
+    try:
+        d = parse(raw) if raw else None
+    except ValueError:
+        d = None
+    if d is None:
+        return now
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    if d > now + timedelta(minutes=2) or d < now - timedelta(hours=24):
+        return now
+    return min(d, now)
+
+
 def _current_stop(load):
     for s in sorted(load.get("stops", []), key=lambda x: x.get("seq", 0)):
         if not s.get("departed_at"):
@@ -873,7 +889,7 @@ def _current_stop(load):
 async def driver_ping(tok: str, body: PingIn):
     load = await load_by_driver_token(tok)
     fleet = await db.fleets.find_one({"id": load["fleet_id"]}, {"_id": 0})
-    ts = now_utc()
+    ts = _ping_time(body.ts)
     acc = body.accuracy or 50
     stop = _current_stop(load)
     event = None
@@ -881,15 +897,19 @@ async def driver_ping(tok: str, body: PingIn):
         dist = haversine_m(body.lat, body.lng, stop["lat"], stop["lng"])
         radius = float(stop.get("radius_m") or DEFAULT_RADIUS)
         coords = {"lat": body.lat, "lng": body.lng, "accuracy": acc}
+        arrived = parse(stop.get("arrived_at")) if stop.get("arrived_at") else None
         if not stop.get("arrived_at") and dist - min(acc, 100) <= radius and acc <= 500:
             await record_arrival(load, stop, ts, "geofence", coords, fleet)
             event = "arrived"
-        elif stop.get("arrived_at") and not stop.get("departed_at") and dist - min(acc, 100) > radius + 150 and acc <= 300:
+        elif (arrived and ts > arrived and not stop.get("departed_at")
+              and dist - min(acc, 100) > radius + 150 and acc <= 300):
             await record_departure(load, stop, ts, "geofence", coords, fleet)
             event = "departed"
     await db.pings.insert_one({"load_id": load["id"], "fleet_id": load["fleet_id"], "lat": body.lat, "lng": body.lng,
                                "accuracy": acc, "ts": iso(ts), "stop_id": stop["id"] if stop else None})
-    await db.loads.update_one({"id": load["id"]}, {"$set": {"last_ping": {"lat": body.lat, "lng": body.lng, "ts": iso(ts)}}})
+    prev = parse((load.get("last_ping") or {}).get("ts")) if (load.get("last_ping") or {}).get("ts") else None
+    if not prev or ts >= prev:
+        await db.loads.update_one({"id": load["id"]}, {"$set": {"last_ping": {"lat": body.lat, "lng": body.lng, "ts": iso(ts)}}})
     load = await load_by_driver_token(tok)
     await process_load(load, fleet)
     load = await load_by_driver_token(tok)

@@ -66,7 +66,7 @@ class TestOpenPage:
 
     def test_invalid_token_page(self):
         r = requests.get(f"{BASE_URL}/api/open/notarealtoken123456")
-        assert r.status_code == 200
+        assert r.status_code == 404  # changed in iteration 5 (was 200)
         assert 'data-testid="open-invalid"' in r.text
 
 

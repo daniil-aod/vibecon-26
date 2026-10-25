@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, AppState, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
@@ -11,7 +11,9 @@ import { PressButton } from "@/src/components/PressButton";
 import { FacilityMap } from "@/src/components/FacilityMap";
 import { useToast } from "@/src/components/Toast";
 import { ApiError, driverApi, DriverPayload, errMsg, Fix, recallApi, rememberApi, resolveApi, Stop } from "@/src/lib/api";
-import { getTrip, on, resumeTracking, startTracking, stopTracking, TrackingMode } from "@/src/lib/tracking";
+import { getTrip, on, queuedCount, flushQueue, resumeTracking, startTracking, stopTracking, TrackingMode } from "@/src/lib/tracking";
+import { useI18n } from "@/src/lib/i18n";
+import { LangToggle } from "@/src/components/LangToggle";
 import { backgroundState, ensureForeground, ensurePrecise, isPrecise, LocIssue, requestBackground } from "@/src/lib/permissions";
 import { clock, dist, fmtClock, hrs } from "@/src/lib/format";
 import { colors, fonts, radius, spacing } from "@/src/theme";
@@ -29,6 +31,9 @@ export default function DriverScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const toast = useToast();
+  const { t: L } = useI18n();
+  const LRef = useRef(L);
+  LRef.current = L;
   const now = useNow(1000);
 
   const [api, setApi] = useState<string | null>(null);
@@ -43,6 +48,7 @@ export default function DriverScreen() {
   const [photoSheet, setPhotoSheet] = useState<null | "choose" | "camera-blocked">(null);
   const [busy, setBusy] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [queued, setQueued] = useState(0);
   const toastRef = useRef(toast);
   toastRef.current = toast;
 
@@ -58,7 +64,7 @@ export default function DriverScreen() {
   const load = useCallback(async () => {
     if (!api) return;
     try { setD(await driverApi.get(api, token)); setErr(null); } catch (e) {
-      if (e instanceof ApiError && e.status === 404) { setErr("This link is not valid"); const t = await getTrip(); if (t?.token === token) await stopTracking("invalid"); }
+      if (e instanceof ApiError && e.status === 404) { setErr("invalid"); const t = await getTrip(); if (t?.token === token) await stopTracking("invalid"); }
       else if (!d) setErr(errMsg(e));
     }
   }, [api, token, d]);
@@ -79,17 +85,22 @@ export default function DriverScreen() {
   }, [token]);
 
   useEffect(() => {
+    queuedCount().then(setQueued);
+    flushQueue();
+    const appSub = AppState.addEventListener("change", (s) => { if (s === "active") flushQueue(); });
+    const retry = setInterval(() => { flushQueue(); }, 15000);
     const a = on("fix", (f) => setPos(f));
+    const q = on("queue", (n) => setQueued(n));
     const b = on("payload", (p) => {
       setD(p);
-      if (p.event === "arrived") toastRef.current.success("Arrival stamped by geofence. Free time is running.");
-      if (p.event === "departed") toastRef.current.success("Departure stamped. Don't forget the BOL photo.");
+      if (p.event === "arrived") toastRef.current.success(LRef.current.toastArrivedGeo);
+      if (p.event === "departed") toastRef.current.success(LRef.current.toastDepartedGeo);
     });
     const c = on("stopped", ({ reason }) => {
       setMode(null);
-      if (reason === "delivered") toastRef.current.success("Load delivered — tracking stopped.");
+      if (reason === "delivered") toastRef.current.success(LRef.current.toastDelivered);
     });
-    return () => { a(); b(); c(); };
+    return () => { a(); b(); c(); q(); appSub.remove(); clearInterval(retry); };
   }, []);
 
   const begin = async () => {
@@ -98,7 +109,7 @@ export default function DriverScreen() {
     const m = await startTracking(token, api);
     setMode(m);
     setBgDenied(m === "foreground" && Platform.OS !== "web");
-    toast.success(m === "background" ? "Tracking started — you can lock your phone." : "Tracking started — keep DockClock open.");
+    toast.success(m === "background" ? L.toastStartedBg : L.toastStartedFg);
   };
 
   const start = async () => {
@@ -111,7 +122,7 @@ export default function DriverScreen() {
       const bg = await backgroundState();
       if (!bg.granted && bg.canAsk && Platform.OS !== "web") { setBgSheet(true); return; }
       await begin();
-    } catch (e) { toast.error(errMsg(e, "Couldn't start location")); } finally { setBusy(""); }
+    } catch (e) { toast.error(errMsg(e, L.startFail)); } finally { setBusy(""); }
   };
 
   const allowBackground = async () => {
@@ -124,7 +135,7 @@ export default function DriverScreen() {
   const getFix = async (): Promise<Fix> => {
     if (pos && pos.accuracy < 1000) return pos;
     const { issue: iss } = await ensureForeground();
-    if (iss) { setIssue(iss); throw new Error("Turn on location so your tap is stamped with GPS"); }
+    if (iss) { setIssue(iss); throw new Error(L.tapNeedsGps); }
     const l = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
     const f = { lat: l.coords.latitude, lng: l.coords.longitude, accuracy: l.coords.accuracy ?? 50 };
     setPos(f);
@@ -138,7 +149,7 @@ export default function DriverScreen() {
       const fix = await getFix();
       const data = await driverApi.tap(api, token, stop.id, action, fix);
       setD(data);
-      toast.success(action === "arrive" ? "Arrival stamped with GPS" : "Departure stamped with GPS");
+      toast.success(action === "arrive" ? L.toastArrive : L.toastDepart);
       if (data.stops.every((s) => s.departed_at) && (await getTrip())?.token === token) await stopTracking("delivered");
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); }
   };
@@ -148,7 +159,7 @@ export default function DriverScreen() {
     setBusy("bol");
     try {
       setD(await driverApi.bol(api, token, stop.id, asset.uri, asset.mimeType || "image/jpeg"));
-      toast.success("BOL photo attached to the load");
+      toast.success(L.toastBol);
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); }
   };
 
@@ -172,7 +183,10 @@ export default function DriverScreen() {
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}>
       <Pressable testID="driver-home-button" onPress={() => router.replace("/")} hitSlop={8}><Logo /></Pressable>
-      {d && <Text style={styles.loadNo} testID="driver-load-number">{d.load_number}</Text>}
+      <View style={styles.rowC}>
+        {d && <Text style={styles.loadNo} testID="driver-load-number">{d.load_number}</Text>}
+        <LangToggle />
+      </View>
     </View>
   );
 
@@ -180,9 +194,9 @@ export default function DriverScreen() {
     <View style={styles.root}>{header}
       <View style={styles.center} testID="driver-link-error">
         <Lucide name="triangle-alert" size={40} color={colors.warning} />
-        <Text style={styles.errT}>{err}</Text>
-        <Text style={styles.muted}>Ask your dispatcher to text you a new link.</Text>
-        <PressButton testID="driver-retry-button" size="md" label="Try again" icon="refresh-cw" onPress={load} bg={colors.primary} fg={colors.primaryForeground} style={{ marginTop: spacing.lg }} />
+        <Text style={styles.errT}>{err === "invalid" ? L.invalidLink : err}</Text>
+        <Text style={styles.muted}>{L.askNewLink}</Text>
+        <PressButton testID="driver-retry-button" size="md" label={L.tryAgain} icon="refresh-cw" onPress={load} bg={colors.primary} fg={colors.primaryForeground} style={{ marginTop: spacing.lg }} />
       </View>
     </View>
   );
@@ -199,11 +213,12 @@ export default function DriverScreen() {
   const tracking = !!mode;
 
   const gpsTone = issue ? styles.chipWarn : !tracking ? styles.chipIdle : pos ? styles.chipOk : styles.chipIdle;
-  const gpsText = issue === "blocked" ? "Location is off — turn it on above"
-    : issue === "services" ? "Location Services are off — turn them on above"
-    : !tracking ? (cur ? "Tap Start trip to share your location" : "Tracking finished")
-    : pos ? `GPS on · ±${Math.round(pos.accuracy)} m${preciseOff ? " · approximate" : " · precise"} · ${mode === "background" ? "you can lock your phone" : "keep the app open"}`
-    : "Finding your location…";
+  const gpsText = issue === "blocked" ? L.gpsBlocked
+    : issue === "services" ? L.gpsServices
+    : !tracking ? (cur ? L.gpsIdle : L.gpsFinished)
+    : pos ? `${L.gpsOn} · ±${Math.round(pos.accuracy)} m · ${preciseOff ? L.approximate : L.precise} · ${mode === "background" ? L.canLock : L.keepOpen}`
+    : L.gpsFinding;
+  const stopType = (s: string) => (s === "pickup" ? L.pickup : s === "delivery" ? L.delivery : s);
 
   return (
     <View style={styles.root}>
@@ -212,19 +227,19 @@ export default function DriverScreen() {
         {issue && (
           <Animated.View entering={FadeIn} style={styles.px} testID="driver-location-blocked">
             <View style={styles.warnCard}>
-              <View style={styles.rowC}><Lucide name="lock" size={20} color={colors.warningText} /><Text style={styles.warnH}>{issue === "services" ? "Turn on Location Services" : "Turn on location"}</Text></View>
-              <Text style={styles.warnP}>DockClock needs your location to auto-stamp your in and out times at the dock. It's only used while this load is open.</Text>
+              <View style={styles.rowC}><Lucide name="lock" size={20} color={colors.warningText} /><Text style={styles.warnH}>{issue === "services" ? L.turnOnServices : L.turnOnLocation}</Text></View>
+              <Text style={styles.warnP}>{L.locWhy}</Text>
               <View style={{ gap: 4, marginTop: spacing.md }}>
                 {(issue === "services"
-                  ? isIOS ? ["Open Settings › Privacy & Security", "Turn on Location Services"] : ["Swipe down from the top of the screen", "Tap Location to turn it on"]
-                  : isIOS ? ["Tap Open Settings below", "Location → choose While Using the App (or Always)", "Turn on Precise Location"] : ["Tap Open Settings below", "Permissions → Location → Allow all the time", "Turn on Use precise location"]
+                  ? isIOS ? L.stepsServicesIOS : L.stepsServicesAndroid
+                  : isIOS ? L.stepsBlockedIOS : L.stepsBlockedAndroid
                 ).map((s, i) => <Text key={s} style={styles.warnLi}>{i + 1}. {s}</Text>)}
               </View>
               <View style={[styles.row2, { marginTop: spacing.md }]}>
-                <PressButton testID="driver-open-settings-button" size="md" label="Open Settings" icon="settings" onPress={() => Linking.openSettings()} bg={colors.warningText} fg={colors.primaryForeground} style={{ flex: 1 }} />
-                <PressButton testID="driver-enable-location-button" size="md" label="Try again" icon="locate-fixed" onPress={start} bg={colors.surface} fg={colors.warningText} border={colors.warningText} style={{ flex: 1 }} />
+                <PressButton testID="driver-open-settings-button" size="md" label={L.openSettings} icon="settings" onPress={() => Linking.openSettings()} bg={colors.warningText} fg={colors.primaryForeground} style={{ flex: 1 }} />
+                <PressButton testID="driver-enable-location-button" size="md" label={L.tryAgain} icon="locate-fixed" onPress={start} bg={colors.surface} fg={colors.warningText} border={colors.warningText} style={{ flex: 1 }} />
               </View>
-              <Text style={styles.warnFoot}>No GPS? You can still tap “I'm at the dock” below and your dispatcher will confirm the time.</Text>
+              <Text style={styles.warnFoot}>{L.noGps}</Text>
             </View>
           </Animated.View>
         )}
@@ -232,9 +247,9 @@ export default function DriverScreen() {
         {!issue && preciseOff && tracking && (
           <View style={styles.px} testID="driver-precise-off">
             <View style={styles.warnCard}>
-              <View style={styles.rowC}><Lucide name="crosshair" size={20} color={colors.warningText} /><Text style={styles.warnH}>Turn on Precise Location</Text></View>
-              <Text style={styles.warnP}>Your phone is sharing an approximate location, so the dock can't stamp exact times. {isIOS ? "In Settings › DockClock Driver › Location, switch on Precise Location." : "In Settings › Location, switch on Use precise location."}</Text>
-              <PressButton testID="driver-precise-settings-button" size="md" label="Open Settings" icon="settings" onPress={() => Linking.openSettings()} bg={colors.warningText} fg={colors.primaryForeground} style={{ marginTop: spacing.md }} />
+              <View style={styles.rowC}><Lucide name="crosshair" size={20} color={colors.warningText} /><Text style={styles.warnH}>{L.preciseTitle}</Text></View>
+              <Text style={styles.warnP}>{L.preciseBody} {isIOS ? L.preciseIOS : L.preciseAndroid}</Text>
+              <PressButton testID="driver-precise-settings-button" size="md" label={L.openSettings} icon="settings" onPress={() => Linking.openSettings()} bg={colors.warningText} fg={colors.primaryForeground} style={{ marginTop: spacing.md }} />
             </View>
           </View>
         )}
@@ -242,58 +257,64 @@ export default function DriverScreen() {
         {!issue && bgDenied && tracking && mode === "foreground" && (
           <View style={styles.px} testID="driver-background-limited">
             <View style={styles.infoCard}>
-              <Text style={styles.infoT}>Tracking pauses if DockClock is closed. To keep stamping with your phone locked, allow location <Text style={styles.b}>{isIOS ? "Always" : "All the time"}</Text>.</Text>
-              <Pressable testID="driver-background-settings-link" onPress={() => Linking.openSettings()} hitSlop={8}><Text style={styles.link}>Open Settings</Text></Pressable>
+              <Text style={styles.infoT}>{L.bgLimited1}<Text style={styles.b}>{isIOS ? L.always : L.allTheTime}</Text>.</Text>
+              <Pressable testID="driver-background-settings-link" onPress={() => Linking.openSettings()} hitSlop={8}><Text style={styles.link}>{L.openSettings}</Text></Pressable>
             </View>
           </View>
         )}
 
         <View style={styles.px}>
-          <Text style={styles.hi}>Hi {d.driver_name || "driver"} · <Text style={styles.mutedInline}>{d.fleet_name}</Text></Text>
+          <Text style={styles.hi}>{L.hi} {d.driver_name || L.driver} · <Text style={styles.mutedInline}>{d.fleet_name}</Text></Text>
           <View style={[styles.chip, gpsTone]} testID="driver-gps-status">
             <Lucide name="satellite" size={16} color={issue ? colors.warningText : tracking && pos ? colors.successText : colors.slate700} />
             <Text style={[styles.chipT, { color: issue ? colors.warningText : tracking && pos ? colors.successText : colors.slate700 }]}>{gpsText}</Text>
           </View>
+          {queued > 0 && (
+            <View style={[styles.chip, styles.chipWarn]} testID="driver-offline-queue">
+              <Lucide name="wifi-off" size={16} color={colors.warningText} />
+              <Text style={[styles.chipT, { color: colors.warningText }]}>{L.offlineSaved(queued)}</Text>
+            </View>
+          )}
         </View>
 
         {cur && !tracking && (
           <Animated.View entering={FadeInDown.duration(350)} style={styles.px}>
             <View style={styles.startCard} testID="driver-start-card">
-              <Text style={styles.startK}>Ready to roll</Text>
-              <Text style={styles.startH}>Press Start once. That's it.</Text>
-              <Text style={styles.startP}>DockClock stamps your arrival and departure at every stop automatically, even with your phone locked, until the load is delivered.</Text>
-              {Platform.OS !== "web" && <Text style={styles.startHint}>When asked, allow location {isIOS ? "and keep Precise on" : "and choose Precise"}.</Text>}
-              <PressButton testID="driver-start-button" label="Start trip" icon="play" loading={busy === "start"} onPress={start} bg={colors.accent} fg={colors.primary} style={{ marginTop: spacing.lg }} />
+              <Text style={styles.startK}>{L.readyK}</Text>
+              <Text style={styles.startH}>{L.readyH}</Text>
+              <Text style={styles.startP}>{L.readyP}</Text>
+              {Platform.OS !== "web" && <Text style={styles.startHint}>{isIOS ? L.readyHintIOS : L.readyHintAndroid}</Text>}
+              <PressButton testID="driver-start-button" label={L.startTrip} icon="play" loading={busy === "start"} onPress={start} bg={colors.accent} fg={colors.primary} style={{ marginTop: spacing.lg }} />
             </View>
           </Animated.View>
         )}
 
         {cur ? (
           <View style={styles.section}>
-            <Text style={styles.kicker}>{onSite ? "At the dock" : "Heading to"} · {cur.type}</Text>
+            <Text style={styles.kicker}>{onSite ? L.atDock : L.headingTo} · {stopType(cur.type)}</Text>
             <Text style={styles.facility} testID="driver-facility-name">{cur.facility_name}</Text>
             {!!cur.address && <View style={styles.addrRow}><Lucide name="map-pin" size={16} color={colors.slate700} style={{ marginTop: 3 }} /><Text style={styles.addr}>{cur.address}</Text></View>}
             {onSite ? (
               <View style={styles.timer} testID="driver-on-site-timer">
-                <Text style={styles.timerSub}>On site since {fmtClock(cur.arrived_at)}</Text>
+                <Text style={styles.timerSub}>{L.onSiteSince} {fmtClock(cur.arrived_at)}</Text>
                 <Text style={styles.timerNum}>{clock(dwell)}</Text>
-                <Text style={[styles.timerState, { color: freeLeft > 0 ? colors.warningGlow : colors.successGlow }]}>{freeLeft > 0 ? `Free time left ${clock(freeLeft)}` : "Detention is running — broker notified"}</Text>
+                <Text style={[styles.timerState, { color: freeLeft > 0 ? colors.warningGlow : colors.successGlow }]}>{freeLeft > 0 ? `${L.freeLeft} ${clock(freeLeft)}` : L.detentionRunning}</Text>
               </View>
             ) : away !== null && (
-              <View style={styles.awayRow} testID="driver-distance"><Lucide name="navigation" size={16} color={colors.slate700} /><Text style={styles.addr}>{away < 50 ? "You're at the gate" : `${(away / 1609).toFixed(1)} mi from the geofence`}</Text></View>
+              <View style={styles.awayRow} testID="driver-distance"><Lucide name="navigation" size={16} color={colors.slate700} /><Text style={styles.addr}>{away < 50 ? L.atGate : L.miAway((away / 1609).toFixed(1))}</Text></View>
             )}
             <View style={{ marginTop: spacing.lg }}><FacilityMap testID="driver-map" stop={cur} truck={pos} height={200} /></View>
             <View style={{ marginTop: spacing.xl, gap: spacing.md }}>
-              {!cur.arrived_at && <PressButton testID="driver-arrived-button" label="I'm at the dock" icon="log-in" loading={busy === "arrive"} disabled={!!busy} onPress={() => tap(cur, "arrive")} bg={colors.primary} fg={colors.primaryForeground} />}
-              {onSite && <PressButton testID="driver-departed-button" label="I'm leaving" icon="log-out" loading={busy === "depart"} disabled={!!busy} onPress={() => tap(cur, "depart")} bg={colors.success} fg={colors.primaryForeground} />}
-              {!cur.arrived_at && <Text style={styles.hint}>Arrival is stamped automatically when you enter the facility. Tap only if it doesn't.</Text>}
+              {!cur.arrived_at && <PressButton testID="driver-arrived-button" label={L.imAtDock} icon="log-in" loading={busy === "arrive"} disabled={!!busy} onPress={() => tap(cur, "arrive")} bg={colors.primary} fg={colors.primaryForeground} />}
+              {onSite && <PressButton testID="driver-departed-button" label={L.imLeaving} icon="log-out" loading={busy === "depart"} disabled={!!busy} onPress={() => tap(cur, "depart")} bg={colors.success} fg={colors.primaryForeground} />}
+              {!cur.arrived_at && <Text style={styles.hint}>{L.autoHint}</Text>}
             </View>
           </View>
         ) : (
           <View style={[styles.section, { alignItems: "center" }]} testID="driver-all-done">
             <Lucide name="circle-check" size={48} color={colors.successStrong} />
-            <Text style={[styles.facility, { marginTop: spacing.md }]}>All stops done</Text>
-            <Text style={styles.muted}>Thanks! Your times are saved and tracking has stopped.</Text>
+            <Text style={[styles.facility, { marginTop: spacing.md }]}>{L.allDone}</Text>
+            <Text style={styles.muted}>{L.allDoneP}</Text>
           </View>
         )}
 
@@ -301,7 +322,7 @@ export default function DriverScreen() {
           <View style={styles.section}>
             <PressButton
               testID="driver-upload-bol-button"
-              label={bolStop.bol_count ? `BOL attached (${bolStop.bol_count}) · add another` : "Photo of signed BOL"}
+              label={bolStop.bol_count ? L.bolAttached(bolStop.bol_count) : L.bolPhoto}
               icon={bolStop.bol_count ? "circle-check" : "camera"}
               loading={busy === "bol"}
               onPress={() => (Platform.OS === "web" ? pickPhoto(bolStop) : setPhotoSheet("choose"))}
@@ -310,12 +331,12 @@ export default function DriverScreen() {
               border={bolStop.bol_count ? colors.successStrong : colors.slate900}
               textStyle={{ fontSize: 17 }}
             />
-            <Text style={styles.hint}>For {bolStop.facility_name}. Make sure the in and out times are readable.</Text>
+            <Text style={styles.hint}>{L.bolHint(bolStop.facility_name)}</Text>
           </View>
         )}
 
         <View style={styles.section}>
-          <Text style={styles.kicker}>All stops</Text>
+          <Text style={styles.kicker}>{L.allStops}</Text>
           <View style={{ gap: spacing.sm, marginTop: spacing.sm }}>
             {stops.map((s, i) => (
               <View key={s.id} style={styles.stopRow} testID={`driver-stop-${i}`}>
@@ -325,7 +346,7 @@ export default function DriverScreen() {
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={styles.stopName} numberOfLines={1}>{s.facility_name}</Text>
                   <Text style={styles.stopMeta}>
-                    {s.departed_at && s.arrived_at ? `In ${fmtClock(s.arrived_at)} · Out ${fmtClock(s.departed_at)} · ${hrs((new Date(s.departed_at).getTime() - new Date(s.arrived_at).getTime()) / 60000)}` : s.arrived_at ? `In ${fmtClock(s.arrived_at)}` : s.type}
+                    {s.departed_at && s.arrived_at ? `${L.inAt} ${fmtClock(s.arrived_at)} · ${L.outAt} ${fmtClock(s.departed_at)} · ${hrs((new Date(s.departed_at).getTime() - new Date(s.arrived_at).getTime()) / 60000)}` : s.arrived_at ? `${L.inAt} ${fmtClock(s.arrived_at)}` : stopType(s.type)}
                   </Text>
                 </View>
               </View>
@@ -340,10 +361,10 @@ export default function DriverScreen() {
           <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]} testID="driver-background-sheet">
             <View style={styles.grab} />
             <Lucide name="lock" size={28} color={colors.accent} />
-            <Text style={styles.sheetH}>Keep tracking with your phone locked</Text>
-            <Text style={styles.sheetP}>So you don't have to keep DockClock open, allow location {isIOS ? <Text style={styles.b}>“Change to Always Allow”</Text> : <Text style={styles.b}>“Allow all the time”</Text>} on the next screen. It turns off automatically after delivery.</Text>
-            <PressButton testID="driver-background-continue-button" label="Continue" icon="check" onPress={allowBackground} bg={colors.primary} fg={colors.primaryForeground} style={{ marginTop: spacing.lg, alignSelf: "stretch" }} />
-            <Pressable testID="driver-background-skip-button" onPress={begin} style={styles.skip}><Text style={styles.skipT}>Not now — I'll keep the app open</Text></Pressable>
+            <Text style={styles.sheetH}>{L.bgSheetH}</Text>
+            <Text style={styles.sheetP}>{L.bgSheetP1}<Text style={styles.b}>{isIOS ? L.bgSheetIOS : L.bgSheetAndroid}</Text>{L.bgSheetP2}</Text>
+            <PressButton testID="driver-background-continue-button" label={L.continue} icon="check" onPress={allowBackground} bg={colors.primary} fg={colors.primaryForeground} style={{ marginTop: spacing.lg, alignSelf: "stretch" }} />
+            <Pressable testID="driver-background-skip-button" onPress={begin} style={styles.skip}><Text style={styles.skipT}>{L.notNow}</Text></Pressable>
           </View>
         </View>
       </Modal>
@@ -355,18 +376,18 @@ export default function DriverScreen() {
             {photoSheet === "camera-blocked" ? (
               <>
                 <Lucide name="camera-off" size={28} color={colors.warning} />
-                <Text style={styles.sheetH}>Camera is off for DockClock</Text>
-                <Text style={styles.sheetP}>Allow camera access in Settings to photograph the BOL, or choose a photo you already took.</Text>
-                <PressButton testID="driver-camera-settings-button" size="md" label="Open Settings" icon="settings" onPress={() => { setPhotoSheet(null); Linking.openSettings(); }} bg={colors.primary} fg={colors.primaryForeground} style={{ marginTop: spacing.lg, alignSelf: "stretch" }} />
+                <Text style={styles.sheetH}>{L.cameraOffH}</Text>
+                <Text style={styles.sheetP}>{L.cameraOffP}</Text>
+                <PressButton testID="driver-camera-settings-button" size="md" label={L.openSettings} icon="settings" onPress={() => { setPhotoSheet(null); Linking.openSettings(); }} bg={colors.primary} fg={colors.primaryForeground} style={{ marginTop: spacing.lg, alignSelf: "stretch" }} />
               </>
             ) : (
               <>
-                <Text style={styles.sheetH}>Attach the signed BOL</Text>
-                <Text style={styles.sheetP}>Make sure the in and out times are readable.</Text>
-                <PressButton testID="driver-take-photo-button" size="md" label="Take photo" icon="camera" onPress={() => bolStop && takePhoto(bolStop)} bg={colors.primary} fg={colors.primaryForeground} style={{ marginTop: spacing.lg, alignSelf: "stretch" }} />
+                <Text style={styles.sheetH}>{L.attachBolH}</Text>
+                <Text style={styles.sheetP}>{L.attachBolP}</Text>
+                <PressButton testID="driver-take-photo-button" size="md" label={L.takePhoto} icon="camera" onPress={() => bolStop && takePhoto(bolStop)} bg={colors.primary} fg={colors.primaryForeground} style={{ marginTop: spacing.lg, alignSelf: "stretch" }} />
               </>
             )}
-            <PressButton testID="driver-choose-photo-button" size="md" label="Choose from photos" icon="image" onPress={() => bolStop && pickPhoto(bolStop)} bg={colors.surface} fg={colors.slate900} border={colors.slate900} style={{ marginTop: spacing.md, alignSelf: "stretch" }} />
+            <PressButton testID="driver-choose-photo-button" size="md" label={L.choosePhoto} icon="image" onPress={() => bolStop && pickPhoto(bolStop)} bg={colors.surface} fg={colors.slate900} border={colors.slate900} style={{ marginTop: spacing.md, alignSelf: "stretch" }} />
           </Pressable>
         </Pressable>
       </Modal>

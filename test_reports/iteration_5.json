@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 5: offline ping backup (backend ts handling + web offline queue) and EN/ES language toggle tested, plus regression of the driver flows. Backend: 24/24 pytest pass after one test expectation was updated: /api/open with an invalid token now returns 404 on purpose (was 200). Checked on the backend: a ts from 10 minutes ago is stored as sent; Z-suffix ts works; a ts 3 days old or 1 hour in the future falls back to server time; invalid ts strings return 200 with server time (no 500); last_ping only moves forward while the older point is still stored; a queued geofence arrival uses the queued ts as arrived_at; a queued far-away point older than arrival does NOT trigger departure; a later point departs at its own ts. Frontend (375x667 web): the default language is English; ES switches home and driver texts (Todavía no hay carga abierta / Iniciar viaje / TODAS LAS PARADAS / chip / invalid link / all-done); the choice is saved in localStorage dockclock.lang and survives reload; EN switches back. Offline queue: with route abort on **/api/driver/*/ping, the driver-offline-queue chip counted 1, 2, 3 and dockclock.queue held the points with their real GPS ts; after the route was restored they were sent oldest-first, the chip disappeared, and Mongo pings hold the original ts values. A forced HTTP 500 also keeps the point queued. A point queued offline inside the geofence produced an arrival on flush with arrived_at equal to the queued GPS ts (on-site timer correct). Regression passed: home bad-link error (EN+ES), opening an /api/open link from the home input, BOL upload on web (file chooser), I'm leaving tap leading to driver-all-done with trip and queue cleared, invalid link screen. No deprecated Expo packages found (expo-av, expo-barcode-scanner and expo-background-fetch are absent).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/driver/{tok}/ping", "issue": "No check that a queued geofence arrival ts is at or after the previous stop's departed_at, so arrival/departure order across stops is not enforced when old points arrive late. Edge case only."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Offline queue (tracking.ts handleFix)", "issue": "After a reload while still offline, the same GPS point (same lat and ts) was queued twice. resumeTracking resets `last`, and the cached position that watchPosition sends first is pushed again, so the server stores a duplicate ping. Fix: skip the push if the newest queued point has the same ts (or ts <= last queued ts).", "testID": "driver-offline-queue", "priority": "LOW"},
+      {"component": "FacilityMap.web.tsx", "issue": "The web map placeholder text is hardcoded English ('Live map shows in the phone app', 'You: lat,lng') and stays English in ES mode. Only on web.", "testID": "driver-map", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Offline flush timing", "issue": "Flush only runs on screen mount or on the next fix that passes the throttle (20s or 25m). When coverage returns and the phone is parked, queued points wait up to about 20s; seen in testing: flush happened 21s after the route was restored. There is no online, NetInfo or AppState trigger. Acceptable, but adding one would make the flush happen right away.", "affected_testIDs": ["driver-offline-queue"]}
+    ],
+    "design_issues": [
+      {"screen": "Header LangToggle", "issues": ["EN/ES pills are 40x32 visually (below 44pt). hitSlop=6 brings the tap area to about 52x44, so this is OK functionally."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_offline_ping.py", "/app/backend/tests/test_driver_app.py", "/app/test_reports/pytest/pytest_results_iter5.xml", "/app/tests/mk_test_load.py", "/app/tests/show_pings.py"],
+  "action_items": [
+    "LOW: tracking.ts handleFix: drop duplicate fixes (same ts as the newest queued point) to avoid double-queuing after a reload or resume.",
+    "MEDIUM (robustness): tracking.ts handleFix returns early while inFlight, so GPS fixes taken during a long flush of a big queue are dropped, not queued. Push the fix into the queue even when inFlight and let the running flush pick it up.",
+    "LOW: Optionally trigger flushQueue on connectivity regained (NetInfo or window 'online') or AppState active, so the flush does not depend on the next GPS fix.",
+    "LOW: Translate the FacilityMap.web.tsx placeholder strings through i18n.",
+    "LOW: A persistent 5xx on one queued point blocks the whole queue (head-of-line). Consider a retry cap or backoff per point."
+  ],
+  "critical_code_review_comments": [
+    "_ping_time is correct: fromisoformat ValueError is caught, naive datetimes get UTC, 2-min future tolerance is clamped by min(d, now), and anything older than 24h or further ahead falls back to server time.",
+    "driver_ping departure guard `ts > arrived` works as intended. last_ping moves forward only; older points are still inserted into pings as evidence.",
+    "flush(): 4xx (other than 404, 408 and 429) drops the point; status 0 (network) and 5xx keep it; 404 stops tracking. Correct. allDone during flush stops tracking and clears the remaining queue (those points come after delivery, so this is acceptable).",
+    "startTracking clears the queue when switching to a different load token, which is good (no cross-load leakage).",
+    "server.py is 1566 lines, well over the 700-line guideline. Consider splitting the driver routes into their own module.",
+    "Pre-existing tsc errors (not new): FacilityMap.tsx WebView overload typing and api.ts implicit any at line 5."
+  ],
+  "updated_files": ["/app/backend/tests/test_driver_app.py (invalid /api/open now expects 404)", "/app/backend/tests/test_offline_ping.py (new)", "/app/tests/mk_test_load.py (new helper)", "/app/tests/show_pings.py (new helper)"],
+  "success_rate": {"backend": "100% (24/24)", "frontend": "100% of requested flows (one low-severity duplicate-queue bug, plus minor i18n gaps on web)"},
+  "seed_data_creation": "Created TEST_ clones of RL-55018 (via make_load in test_offline_ping.py) and deleted them all afterwards (0 TEST_ loads left).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use test_offline_ping.py::make_load (or /app/tests/mk_test_load.py) to make a mutable TEST_ load. Stop 0 is at 34.049,-117.435. On web, grant geolocation via page.context.grant_permissions and drive with set_geolocation. Each browser_automation call gets fresh localStorage. Simulate offline with page.route('**/api/driver/*/ping', abort). Pings are throttled (20s or 25m), so move more than 25m to force an immediate ping or flush. On web, BOL upload opens the file chooser directly (no driver-photo-sheet).",
+  "rca_of_issue": "Duplicate queued point: on page reload resumeTracking() -> startTracking() resets `last` = {t:0}. On web, watchPositionAsync first sends the cached position, which has the same timestamp as the last queued point, so it passes the throttle and gets pushed again. Reproduce: start trip, abort the ping route, move, reload, and see the dockclock.queue entries with identical ts."
+}

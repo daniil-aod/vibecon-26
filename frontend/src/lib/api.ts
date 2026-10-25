@@ -14,7 +14,7 @@ export type DriverPayload = {
   load_number: string; fleet_name: string; driver_name?: string | null;
   free_time_hours?: number; requires_signed_bol?: boolean; stops: Stop[]; event?: string | null;
 };
-export type Fix = { lat: number; lng: number; accuracy: number };
+export type Fix = { lat: number; lng: number; accuracy: number; ts?: string };
 
 /** Only accept a backend origin (from the texted link) that we trust — location data is sensitive. */
 export function resolveApi(raw?: string | null): string {
