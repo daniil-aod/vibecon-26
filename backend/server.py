@@ -1030,10 +1030,31 @@ def driver_payload(load, fleet):
             "driver_name": (load.get("driver") or {}).get("name"),
             "free_time_hours": (load.get("detention") or {}).get("free_time_hours"),
             "requires_signed_bol": (load.get("detention") or {}).get("requires_signed_bol"),
+            "test_load": bool(load.get("is_test_load")),
             "stops": [{k: s.get(k) for k in ("id", "seq", "type", "facility_name", "address", "appointment", "lat", "lng",
                                             "radius_m", "arrived_at", "departed_at", "arrived_source", "departed_source")}
                       | {"bol_count": len(s.get("bol", [])), "free_expires_at": s["billing"].get("free_expires_at"),
                          "notice_sent_at": s["notice"].get("sent_at")} for s in stops]}
+
+
+@api.post("/driver/{tok}/reset-test")
+async def driver_reset_test(tok: str):
+    """Only for the owner's test load: put it back to 'not started' so the trip can be tried again."""
+    load = await load_by_driver_token(tok)
+    if not load.get("is_test_load"):
+        raise HTTPException(status_code=403, detail="Only test loads can be reset")
+    for s in load["stops"]:
+        s.update({"arrived_at": None, "departed_at": None, "arrived_source": None, "departed_source": None,
+                  "arrived_coords": None, "departed_coords": None, "events": [], "bol": [],
+                  "notice": {"status": "pending", "due_at": None, "sent_at": None}})
+        if s.get("anchor_on_first_fix"):
+            s.update({"lat": None, "lng": None, "address": "Set to your location when you press Start trip"})
+    await db.loads.update_one({"id": load["id"]}, {"$set": {"stops": load["stops"], "last_ping": None, "updated_at": iso(now_utc())}})
+    await db.pings.delete_many({"load_id": load["id"]})
+    await db.invoices.delete_many({"load_id": load["id"]})
+    await db.notices.delete_many({"load_id": load["id"]})
+    fleet = await db.fleets.find_one({"id": load["fleet_id"]}, {"_id": 0})
+    return driver_payload(await load_by_driver_token(tok), fleet)
 
 
 @api.get("/open/{tok}", response_class=HTMLResponse)
@@ -1098,6 +1119,13 @@ async def driver_ping(tok: str, body: PingIn):
     acc = body.accuracy or 50
     stop = _current_stop(load)
     event = None
+    if (stop is not None and stop.get("lat") is None and stop.get("anchor_on_first_fix") and load.get("is_test_load")
+            and (body.accuracy or 50) <= 100):
+        # Test load: the first dock is placed where the driver pressed Start trip (only on an accurate fix).
+        stop["lat"], stop["lng"] = body.lat, body.lng
+        stop["address"] = f"Your location when you pressed Start ({body.lat:.5f}, {body.lng:.5f})"
+        await db.loads.update_one({"id": load["id"], "stops.id": stop["id"]}, {"$set": {
+            "stops.$.lat": body.lat, "stops.$.lng": body.lng, "stops.$.address": stop["address"]}})
     if stop is not None and stop.get("lat") is not None:
         dist = haversine_m(body.lat, body.lng, stop["lat"], stop["lng"])
         radius = float(stop.get("radius_m") or DEFAULT_RADIUS)

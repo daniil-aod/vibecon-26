@@ -288,7 +288,10 @@ curl -X POST "$BACKEND_URL/api/demo/reseed" -H "Authorization: Bearer $WEBHOOK_C
 ```
 Note: a rebuild regenerates `public_token`s, so `/e/...` and `/d/...` links change. List current links:
 `python -c "..."` querying loads.driver_token and invoices.public_token for the demo fleet.
-Current `DEMO_VERSION = 2`.
+Current `DEMO_VERSION = 3`. Demo driver tokens are now deterministic (sha256 of fleet id + load number), so driver
+links survive reseeds. **TEST-0001** is the owner's own test load: stop 1 "Your test dock" is anchored at the first
+accurate (≤100 m) GPS fix after Start trip, with radius 150 m, so departure fires about 300 m away. `POST
+/api/driver/{tok}/reset-test` (test loads only) resets it.
 
 ---
 

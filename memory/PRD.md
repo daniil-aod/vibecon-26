@@ -56,3 +56,10 @@ End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads 
 - Note: the web dashboard changes in /app/web go live only when the web app is republished.
 
 
+## 2026-06 — Round 4
+- TEST-0001 test load in the abdowns4 demo fleet (Evergreen contract), anchored at the first accurate fix; reset endpoint plus an in-app Reset test trip button. Demo driver tokens are stable (DEMO_VERSION 3).
+- App Store readiness: bundle id/package com.dockclock.driver, 1024 icon, adaptive icon, splash, ITSAppUsesNonExemptEncryption false, removed unused "fetch" background mode; .env no longer git-ignored (deployment blocker).
+- Tested: iteration_8 (backend 10/10, frontend pass); accuracy gate and card order fixed afterwards.
+- Backlog: localize server-provided test-load strings; delete BOL files on test reset.
+
+

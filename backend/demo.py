@@ -30,7 +30,7 @@ from storage import put_object, APP_NAME
 
 DEMO_FLEET_ID = "demo-dockclock-fleet"
 DEMO_OWNER_EMAIL = "abdowns4@gmail.com"
-DEMO_VERSION = 2  # bump to force a rebuild on next startup when features change
+DEMO_VERSION = 3  # bump to force a rebuild on next startup when features change
 PREVIEW_URL = "https://load-locator-4.preview.emergentagent.com"
 
 # collections that hold demo-fleet-scoped data (everything keyed by fleet_id)
@@ -567,6 +567,26 @@ class _Seeder:
         invF["viewed_at"] = iso(ago(days=5, hours=20))
         invF["history"] = [{"at": iso(sentF), "action": "emailed", "to": loadF["broker"]["email"]},
                            {"at": iso(ago(days=4)), "action": "dispute", "note": "Broker says appointment was missed by shipper, reviewing.", "by": "demo"}]
+
+        # ---- LOAD G: YOUR TEST LOAD (fresh, not arrived). Stop 1 is anchored wherever the driver presses
+        # Start trip, so the owner can test geofence arrival/departure for real from anywhere.
+        detG = det_for("evergreen", 1800)
+        gpu, _ = self._make_stop(0, "pickup", "joliet", appt=now_utc().strftime("%Y-%m-%dT08:00"))
+        gpu.update({"facility_id": None, "facility_name": "Your test dock", "lat": None, "lng": None, "radius_m": 150,
+                    "address": "Set to your location when you press Start trip", "anchor_on_first_fix": True})
+        gdl, gfac = self._make_stop(1, "delivery", "fontana", appt=(now_utc() + timedelta(days=1)).strftime("%Y-%m-%dT09:00"))
+        stopsG = [{"type": "pickup", "facility_name": "Your test dock", "address": "(your location)", "appointment": gpu["appointment"]},
+                  {"type": "delivery", "facility_name": gfac["name"], "address": gfac["address"], "appointment": gdl["appointment"]}]
+        pdfG = make_ratecon_pdf("TEST-0001", BROKERS["evergreen"], "Summit Ridge Carriers LLC", stopsG, detG)
+        precG = await self._store(pdfG, "application/pdf", "pdf", "ratecon", {"original_filename": "TEST-0001-ratecon.pdf"})
+        precG["extracted"] = {"load_number": "TEST-0001", "broker": BROKERS["evergreen"], "carrier_name": "Summit Ridge Carriers LLC",
+                              "linehaul_amount": 1800.0, "stops": stopsG,
+                              "detention": {k: v for k, v in detG.items() if not k.startswith("_")},
+                              "low_confidence": [], "_model": "gemini-3.1-pro-preview"}
+        loadG, _ = self._load("TEST-0001", "evergreen", "Summit Ridge Carriers LLC", 1800, [(gpu, None), (gdl, gfac)],
+                              {"name": "You (test driver)", "phone": "", "email": DEMO_OWNER_EMAIL},
+                              "planned", ratecon_file_id=precG["id"], texted=False)
+        loadG["is_test_load"] = True
 
         # fix bol back-reference load_id now that loads exist
         for rec in self.files:

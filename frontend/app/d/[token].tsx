@@ -181,6 +181,17 @@ export default function DriverScreen() {
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
+  const resetTest = async () => {
+    if (!api) return;
+    setBusy("reset");
+    try {
+      if ((await getTrip())?.token === token) await stopTracking("reset");
+      setD(await driverApi.resetTest(api, token));
+      setPos(null);
+      toast.success(L.resetDone);
+    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); }
+  };
+
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}>
       <Pressable testID="driver-home-button" onPress={() => router.replace("/")} hitSlop={8}><Logo /></Pressable>
@@ -277,6 +288,17 @@ export default function DriverScreen() {
             </View>
           )}
         </View>
+
+        {d.test_load && (
+          <View style={styles.px} testID="driver-test-load-card">
+            <View style={styles.infoCard}>
+              <Text style={styles.infoT}>{L.testLoadNote}</Text>
+              <Pressable testID="driver-reset-test-button" disabled={!!busy} onPress={resetTest} style={styles.resetBtn}>
+                <Text style={styles.link}>{busy === "reset" ? "…" : L.resetTest}</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
 
         {cur && !tracking && (
           <Animated.View entering={FadeInDown.duration(350)} style={styles.px}>
@@ -417,6 +439,7 @@ const styles = StyleSheet.create({
   infoCard: { backgroundColor: colors.slate100, borderRadius: radius.lg, padding: spacing.md, gap: spacing.xs },
   infoT: { fontFamily: fonts.body, fontSize: 14, lineHeight: 20, color: colors.slate700 },
   link: { fontFamily: fonts.bodySemi, fontSize: 14, color: colors.accent, paddingVertical: spacing.xs },
+  resetBtn: { minHeight: 44, justifyContent: "center", alignSelf: "flex-start" },
   b: { fontFamily: fonts.bodySemi },
   hi: { fontFamily: fonts.body, fontSize: 16, color: colors.slate900 },
   mutedInline: { color: colors.mutedForeground },
