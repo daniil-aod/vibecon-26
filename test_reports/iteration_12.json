@@ -1,0 +1,46 @@
+{
+  "summary": "I tested the detention billing packet and finalization feature end to end over the public URL as the Clerk QA user in fleet 'TEST_QA Haulers'. New pytest file test_billing_packet_http.py: 13/13 passed. The existing test_finalization.py still passes 8/8. Main flow works: the pickup invoice is $75, ready, while transport is in_progress. Right after the final departure ping, the load is completed, the packet is draft v1, submission is blocked, total is 187.5, and there is a POD blocker. The driver payload has transport_completed and documents_needed. In the UI: uploading the POD changes the blocker to 'signature not yet confirmed'; 'I checked: signed' clears it and submission becomes 'awaiting_review'; Approve & submit gives 'Accepted (simulated)', 'Issued v1', both invoices sent, and the PDF opens. Also verified: idempotency (still 2 invoices, 1 submission, 1 packet after repeat pings and reloads), per-load cap (150 = 75 + 75), portal flow (awaiting_portal, invoices stay ready, recorded through portal-ref-input and portal-done-button), unknown terms (terms_missing blocker with an action, no invoice), manual completion (reason shown), the Edit terms Billing & submission section (term-source badges, 'Unknown / not stated' selects, save works), demo fleet states (all 5 as expected), security, and regression pages (invoices page, /e/<token>, driver email card). The 5-page PDF looks professional. I found 2 real bugs: the revision flow can submit a packet with no new charges, and the old per-invoice Send on the Invoices page skips the packet blockers.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/invoices/{id}/send (Invoices page 'Send' button)", "issue": "Skips the new packet flow. On a load whose submission was 'blocked' (POD missing, destination not confirmed, review mode), Send returned 200 and marked DC-1021 'sent' to the broker contact email (delivered@resend.dev) instead of the AP email (ap@example.test). No packet was issued and no outbox job was created. In live mode this would bill without the required documents and bypass dispatcher review. Repro: load with blockers -> POST /api/invoices/{ready_inv}/send -> 200, invoice sent, completion.submission is still 'blocked'.", "priority": "HIGH"},
+      {"endpoint": "finalize._finalize revision_review + POST /loads/{id}/billing/submit", "issue": "Revision submits a packet with no new charges. After a dispatcher adjusts times on an already-submitted load (delivery departure +30 min), detention goes from 187.5 to 225. Invoice DC-1018 stays 'sent' 112.5 with pending_adjustment +37.5. Submission becomes 'revision_review' and the button reads 'Issue revision & submit new charges'. Submitting issues v2 and sends a second (simulated) billing email whose packet lists only 'Previously submitted' invoices: invoiced 187.5 while detention_calculated is 225. The supplemental invoice (DC-1018-A1) is only created after a separate manual 'Issue correction', which then needs a v3 packet and a third email. POST /invoices/{id}/adjust also does not rerun finalize, so v3 only appears after the next page load or cron.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "_billing_fields / finalize.destination", "issue": "The destination comparison treats '' and None as different. A PUT where billing_company or portal_url goes from None to '' (for example, typing in a field and then clearing it) drops billing_setup.confirmed_at and adds a 'destination_unconfirmed' blocker even though nothing changed. Normalize empty strings before comparing."},
+      {"endpoint": "_finalize revision_review", "issue": "The submission state keeps the old 'simulated' flag, so the UI chip reads 'Revision awaiting review (simulated)' before anything has been submitted."},
+      {"endpoint": "DELETE /api/loads/{id}", "issue": "Deleting a load with draft packets leaves orphan packets (6 found in the QA fleet). This may be intended under keep_forever, but draft packets of deleted loads are just noise."},
+      {"endpoint": "process_load notices on backfilled pings", "issue": "When offline pings arrive late, broker notices are sent hours after the stop. The payor-facing packet then shows 'Detention notice: Sent LATE' under exceptions. This is accurate but works against the carrier; consider not auto-sending notices for stops that have already departed."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Invoices page Send", "issue": "The Send button on ready invoices skips the packet, review and blocker workflow (see the backend critical item). Hide it, or route it through /billing/submit, for loads that use packet billing.", "affected_selectors": ["Invoices page Send button"]}
+    ],
+    "design_issues": [
+      {"screen": "Load detail timeline", "issues": ["Raw event type 'document_uploaded' and raw value \"pod\" are shown instead of readable labels."]},
+      {"screen": "BillingPanel", "issues": ["The unverified-documents list shows 'signature not confirmed' for every unverified doc type, including lumper receipts and other non-signature documents.", "Portal ref input and reconcile ref input share the same state (f.ref).", "Manual completion and approval datetime-local inputs use the browser's timezone, not the fleet timezone."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_billing_packet_http.py", "/app/test_reports/pytest/billing_http.xml", "/app/tests/mk_billing_ui_loads.py", "/app/tests/billing_extra_checks.py", "/app/tests/billing_revision_check.py"],
+  "action_items": [
+    "Make POST /invoices/{id}/send respect packet blockers, billing mode and the AP destination (or hide Send for packet-billed loads).",
+    "Revision flow: when a sent invoice has a pending_adjustment, either create the supplement or credit invoice automatically before the revision is issued, or block 'Issue revision & submit' until the correction exists. Rerun finalize after /invoices/{id}/adjust.",
+    "Normalize ''/None in the destination comparison so a no-op edit does not drop the billing confirmation.",
+    "Reset the 'simulated' flag when submission moves to revision_review.",
+    "Minor UI polish: readable labels for timeline document events; only show 'signature not confirmed' for signed_bol and pod documents."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2330 lines and finalize.py is 817; split them into routers and modules.",
+    "mark_portal_submitted calls enqueue with an idempotency key per packet; if the job already exists (accepted), it is set back to 'sending' and accepted again. The endpoint guard on the awaiting_portal state prevents this today, but the service function itself is not idempotent.",
+    "required_documents for a 'pod' requirement accepts bol_photo/signed_bol/pod types interchangeably; this is intentional but may be looser than what the payor requires."
+  ],
+  "updated_files": ["/app/backend/tests/test_billing_packet_http.py", "/app/tests/mk_billing_ui_loads.py", "/app/tests/billing_extra_checks.py", "/app/tests/billing_revision_check.py", "/app/tests/artifacts/pod.png", "/app/tests/artifacts/qa_packet_v1.pdf"],
+  "success_rate": {"backend": "13/13 new HTTP tests + 8/8 in-process tests pass; 2 high-severity logic bugs found by exploratory checks", "frontend": "~95% (all requested UI flows work; 1 integration gap on the Invoices page)"},
+  "seed_data_creation": "QA fleet: several TEST-* loads (MAIN, PORTAL, UIA, UIP, UIM, CAP, etc.). Loads with sent invoices cannot be deleted (by design) and remain; the others were deleted. The demo fleet was not modified (read-only DB checks only). The fleet billing profile legal_name/remittance_address is set.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "test_credentials": "See /app/memory/test_credentials.md (Clerk ticket via clerk_helper.py; single-use).",
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest -v -n 0 tests/test_billing_packet_http.py. pytest.ini adds -n/xdist with loadscope; use -n 0 for order-dependent classes. UI loads: python /app/tests/mk_billing_ui_loads.py prints ids. To render PDFs, pip install --target /tmp/pdfium pypdfium2. The server clock reads Oct 2026. Re-test: the revision flow (billing_revision_check.py) and the legacy invoice Send bypass (/tmp/legacy.py logic: send a ready invoice on a blocked load).",
+  "rca of the issue": "Legacy Send: /invoices/{id}/send predates finalize and only checks invoice status and broker email, then calls finalize_load afterwards instead of gating on completion.blockers or billing_setup. Revision: upsert_draft detects a material change and sets revision_review, but ensure_invoices only records pending_adjustment on sent invoices and never creates the supplement row. The snapshot therefore has no new invoice rows, yet submit_packet still issues and emails the new version."
+}

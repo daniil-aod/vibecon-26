@@ -22,7 +22,7 @@ from core import now_utc, iso, parse, compute_load_billing, canonical_hash, trai
 from packetpdf import build_billing_packet
 
 logger = logging.getLogger("dockclock.finalize")
-ctx = types.SimpleNamespace()
+ctx = types.SimpleNamespace(pending_adjustments=[], fault_hook=None)
 
 # simulate (default): no real email leaves the system; every submission is recorded as SIMULATED.
 SUBMISSION_MODE = os.environ.get("BILLING_SUBMISSION_MODE", "simulate")
@@ -223,8 +223,8 @@ def destination(load) -> dict:
     basis = "accounts payable"
     if not to and t.get("use_broker_contact_for_billing"):
         to, basis = ((load.get("broker") or {}).get("email") or "").strip(), "broker contact (configured as billing recipient)"
-    return {"channel": ch, "recipient": to or None, "basis": basis if to else None, "company": t.get("billing_company"),
-            "portal_url": t.get("portal_url"), "other_text": t.get("submission_other_text"),
+    return {"channel": ch or None, "recipient": to or None, "basis": basis if to else None, "company": t.get("billing_company") or None,
+            "portal_url": t.get("portal_url") or None, "other_text": t.get("submission_other_text") or None,
             "requires_attachment": t.get("requires_attachment")}
 
 
@@ -268,6 +268,9 @@ def blockers(load, fleet, billing, trans, docs, appr) -> list:
                 "Pick the value that applies (Resolve conflict).")
     for f in trans.get("review_flags", []):
         add("review_departure", f["message"], "Confirm or correct the departure time.")
+    for inv in ctx.pending_adjustments or []:
+        add("correction_pending", f"{inv['number']} was issued at ${inv['amount']:,.2f}; the recalculated amount is "
+            f"${inv['pending_adjustment']['new_amount']:,.2f}.", "Issue a correction (bills or credits only the difference) before the revision.")
     return out
 
 
@@ -291,11 +294,17 @@ async def ensure_invoices(load, fleet, billing) -> list:
                     await db.invoices.update_one({"id": ex["id"], "status": "ready"}, {"$set": {"amount": amt, "billable_label": label}})
             elif ex["status"] == "void" and amt > 0:
                 await db.invoices.update_one({"id": ex["id"], "status": "void"}, {"$set": {"status": "ready", "amount": amt, "billable_label": label}})
-            elif ex["status"] in ("sent", "paid", "disputed", "written_off") and abs(ex["amount"] - amt) > 0.001:
+            elif ex["status"] in ("sent", "paid", "disputed", "written_off"):
+                # effective billed amount = original + supplements - credit notes (originals are never edited)
+                corr = await db.invoices.find({"adjusts_invoice_id": ex["id"]}, {"_id": 0, "kind": 1, "amount": 1}).to_list(50)
+                billed = round(ex["amount"] + sum(c["amount"] if c.get("kind") == "supplement" else -c["amount"] for c in corr), 2)
                 adj = ex.get("pending_adjustment") or {}
-                if abs((adj.get("new_amount") or -1) - amt) > 0.001:
+                if abs(billed - amt) <= 0.001:
+                    if adj:
+                        await db.invoices.update_one({"id": ex["id"]}, {"$unset": {"pending_adjustment": ""}})
+                elif abs((adj.get("new_amount") or -1) - amt) > 0.001:
                     await db.invoices.update_one({"id": ex["id"]}, {"$set": {"pending_adjustment": {
-                        "new_amount": amt, "delta": round(amt - ex["amount"], 2), "detected_at": iso(now_utc())}}})
+                        "new_amount": amt, "delta": round(amt - billed, 2), "billed_so_far": billed, "detected_at": iso(now_utc())}}})
             continue
         if amt <= 0:
             continue
@@ -341,7 +350,7 @@ async def _stop_pings(load, s, cutoff, received_before):
 def _status_label(inv, packet_invoice_ids_prev):
     st = inv["status"]
     return {"ready": "New - submitted with this packet", "sent": "Previously submitted", "paid": "Paid", "disputed": "Disputed",
-            "written_off": "Written off", "void": "Void"}.get(st, st)
+            "written_off": "Written off", "void": "Void", "credit": "Credit note"}.get(st, st)
 
 
 async def build_snapshot(load, fleet, billing, invoices, trans, docs, appr, packet_id, version, received_before=None,
@@ -438,6 +447,9 @@ async def build_snapshot(load, fleet, billing, invoices, trans, docs, appr, pack
             continue
         s = next((x for x in stops if x["id"] == inv["stop_id"]), {})
         bal = invoice_balance(inv)
+        if inv.get("kind") == "credit_note":
+            inv = {**inv, "amount": -abs(inv["amount"])}
+            tot_o = max(0.0, tot_o + inv["amount"])
         inv_rows.append({"id": inv["id"], "number": inv["number"], "stop_id": inv["stop_id"], "stop_label": _stop_label(s) if s else "-",
                          "facility": inv.get("facility_name"), "status": inv["status"], "status_label": _status_label(inv, None),
                          "amount": inv["amount"], "paid": bal["paid"], "outstanding": bal["outstanding"],
@@ -694,6 +706,8 @@ async def _accepted(j, ref, how, actor=None):
 async def mark_portal_submitted(load, packet, reference, actor):
     """Dispatcher records the portal upload; invoices become submitted only then."""
     job = await enqueue("billing_submission", load, {"id": load["fleet_id"]}, packet, to=None, extra={"channel": "portal"})
+    if job["status"] == "accepted":
+        return  # already recorded - idempotent
     await _db().outbox.update_one({"id": job["id"]}, {"$set": {"status": "sending"}})
     await _accepted({**job, "status": "sending"}, reference or "portal", "dispatcher_portal", actor)
     await _sync_submission(load["id"])
@@ -746,7 +760,9 @@ async def _finalize(load, trigger, actor):
     invoices = await ensure_invoices(load, fleet, billing)
     trans = transport_state(load)
     docs, appr = documents_state(load), approvals_state(load, billing)
+    ctx.pending_adjustments = [i for i in invoices if i.get("pending_adjustment")]
     blk = blockers(load, fleet, billing, trans, docs, appr)
+    ctx.pending_adjustments = []
     prev = load.get("completion") or {}
     comp = {"transport": trans, "documents": docs, "approvals": {k: v for k, v in appr.items() if k != "records"},
             "blockers": blk, "billing_total": billing["total"], "missing_terms": billing["missing_terms"],
@@ -777,7 +793,7 @@ async def _finalize(load, trigger, actor):
                 if blk:
                     comp["submission"] = {**comp["submission"], "state": "blocked"} if sub_state in (None, "not_started", "blocked", "awaiting_review") else comp["submission"]
                 elif p.get("supersedes"):
-                    comp["submission"] = {**comp["submission"], "state": "revision_review"}
+                    comp["submission"] = {"state": "revision_review", "previous": {k: comp["submission"].get(k) for k in ("provider_ref", "accepted_at", "simulated")}}
                 elif comp["billing_mode"] == "auto":
                     await db.loads.update_one({"id": load["id"]}, {"$set": {"completion": comp}})
                     await submit_packet(load, fleet, p, actor or "automation", d)

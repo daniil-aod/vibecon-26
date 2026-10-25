@@ -209,8 +209,21 @@ def test_previously_submitted_pickup_not_billed_twice_and_correction_versioned()
         assert dinv["amount"] == 112.5 and dinv["pending_adjustment"]["new_amount"] == 75.0
         comp = await finalize.source_comparison(p1, await get(db, load["id"]), f)
         assert comp["state"] == "amended"
+        ld = await get(db, load["id"])
+        assert any(b["code"] == "correction_pending" for b in ld["completion"]["blockers"])  # revision cannot go out yet
         adj = await server.adjust_invoice(dinv["id"], server.RefIn(note="Gate log correction"), m)
         assert adj["kind"] == "credit_note" and adj["amount"] == 37.5 and adj["status"] == "credit"
+        ld = await get(db, load["id"])
+        assert ld["completion"]["blockers"] == [] and ld["completion"]["submission"]["state"] == "revision_review"
+        assert not (await db.invoices.find_one({"id": dinv["id"]})).get("pending_adjustment")
+        r = await server.billing_submit(load["id"], m)
+        v2 = await db.packets.find_one({"load_id": load["id"], "version": 2}, {"_id": 0})
+        assert v2["status"] == "issued" and v2["snapshot"]["totals"]["outstanding"] == 150.0
+        v1 = await db.packets.find_one({"id": p["id"]}, {"_id": 0})
+        assert v1["status"] == "superseded" and v1["pdf_sha256"] == pdf_before
+        # a completed packet-billed load can no longer be sent invoice-by-invoice
+        with pytest.raises(server.HTTPException):
+            await server.send_invoice(dinv["id"], m)
         return True
     assert run(t)
 

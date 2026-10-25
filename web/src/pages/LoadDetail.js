@@ -21,7 +21,8 @@ import LoadForm, { fromLoad } from "@/pages/LoadForm";
 import { BillingPanel } from "@/components/BillingPanel";
 import { DriverEmailCard } from "@/components/DriverEmailCard";
 
-const EVL = { arrival: [LogIn, "Arrived"], departure: [LogOut, "Departed"], free_time_expired: [Clock, "Free time ended"], notice_sent: [BellRing, "Broker notice sent"], bol_uploaded: [Camera, "BOL photo uploaded"] };
+const EVL = { arrival: [LogIn, "Arrived"], departure: [LogOut, "Departed"], free_time_expired: [Clock, "Free time ended"], notice_sent: [BellRing, "Broker notice sent"], bol_uploaded: [Camera, "BOL photo uploaded"],
+  document_uploaded: [FileText, "Document uploaded"], notice_phone_recorded: [BellRing, "Phone notice recorded"], notice_portal_recorded: [BellRing, "Portal notice recorded"] };
 const SRC = { geofence: "geofence", driver_tap: "driver tap + GPS", dispatcher_edit: "dispatcher edit" };
 const toLocalInput = (iso) => { if (!iso) return ""; const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 
@@ -154,7 +155,7 @@ export default function LoadDetail() {
                 <div key={inv.id} data-testid={`load-invoice-${inv.id}`} className="flex items-center gap-3 rounded-lg border p-3">
                   <div className="min-w-0 flex-1"><div className="font-mono text-sm font-semibold">{inv.number}</div><div className="truncate text-xs text-muted-foreground">{inv.facility_name}</div></div>
                   <span className="num font-mono text-sm">{money(inv.amount)}</span>
-                  {inv.status === "ready" ? <Button size="sm" data-testid={`load-send-invoice-${inv.id}`} disabled={busy === `i${inv.id}`} onClick={() => sendInvoice(inv)}><Send className="mr-1 h-3.5 w-3.5" />Send</Button> : <StatusChip status={inv.status} />}
+                  {inv.status === "ready" && load.billing_setup && load.stops.every((x) => x.departed_at) ? <StatusChip status="ready" /> : inv.status === "ready" ? <Button size="sm" data-testid={`load-send-invoice-${inv.id}`} disabled={busy === `i${inv.id}`} onClick={() => sendInvoice(inv)}><Send className="mr-1 h-3.5 w-3.5" />Send</Button> : <StatusChip status={inv.status} />}
                 </div>))}
                 <Link to="/app/invoices" className="block pt-1 text-xs text-teal-700 hover:underline">Manage invoices</Link>
               </div>

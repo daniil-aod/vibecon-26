@@ -45,7 +45,7 @@ export function BillingPanel({ api, loadId, tz, stops, onChanged }) {
   const blockers = c.blockers || [];
   const docs = b.documents || {};
   const pay = c.payment || {};
-  const unverified = (stops || []).flatMap((s) => (s.bol || []).filter((d) => !d.signature_verified).map((d) => ({ ...d, stop: s })));
+  const unverified = (stops || []).flatMap((s) => (s.bol || []).filter((d) => !d.signature_verified && ["signed_bol", "pod", "bol_photo", undefined].includes(d.doc_type)).map((d) => ({ ...d, stop: s })));
   const phoneObl = (b.obligations || []).filter((o) => o.kind?.startsWith("notice_") && o.kind !== "notice_email");
   const finalOpen = (stops || []).some((s) => !s.departed_at);
   const canSubmit = !blockers.length && ["awaiting_review", "revision_review"].includes(sub.state);
@@ -67,7 +67,7 @@ export function BillingPanel({ api, loadId, tz, stops, onChanged }) {
         <Chip testid="state-submission" label="Submission" value={subLabel + (sub.simulated ? " (simulated)" : "")} tone={subTone} />
         <Chip testid="state-payment" label="Payment" value={pay.state === "n/a" ? "-" : `${pay.state} · ${money(pay.outstanding || 0)} open`} tone={pay.state === "paid" ? "ok" : "idle"} />
       </div>
-      {tr.state === "completed" && <p className="mt-2 text-xs text-muted-foreground">Completed {fmtTime(tr.completed_at, tz)} via {tr.manual ? `manual completion by dispatcher (${tr.manual.reason})` : tr.source}. Detention calculated: <b>{money(c.billing_total || 0)}</b>.</p>}
+      {tr.state === "completed" && <p className="mt-2 text-xs text-muted-foreground">Completed {fmtTime(tr.completed_at, tz)} via {tr.manual ? `manual completion by dispatcher (${tr.manual.reason})` : ({ geofence: "GPS geofence exit", driver_tap: "driver tap", dispatcher_edit: "dispatcher adjustment" }[tr.source] || tr.source)}. Detention calculated: <b>{money(c.billing_total || 0)}</b>.</p>}
       {c.summary && <p data-testid="completion-summary" className="mt-2 rounded-lg bg-slate-50 p-2 text-xs">{c.summary.text}</p>}
 
       {!!blockers.length && (
@@ -99,14 +99,14 @@ export function BillingPanel({ api, loadId, tz, stops, onChanged }) {
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {canSubmit && <Button data-testid="billing-submit-button" disabled={!!busy} onClick={() => run("submit", () => api.post(`/loads/${loadId}/billing/submit`), "Billing packet submitted")}><Send className="mr-2 h-4 w-4" />{sub.state === "revision_review" ? "Issue revision & submit new charges" : "Approve & submit"}</Button>}
+        {canSubmit && <Button data-testid="billing-submit-button" disabled={!!busy} onClick={() => run("submit", () => api.post(`/loads/${loadId}/billing/submit`), "Billing packet submitted")}><Send className="mr-2 h-4 w-4" />{sub.state === "revision_review" ? "Issue revised packet & submit" : "Approve & submit"}</Button>}
         {["awaiting_portal", "awaiting_manual"].includes(sub.state) && <>
           <Input data-testid="portal-ref-input" className="w-56" placeholder="Portal confirmation #" value={f.ref} onChange={(e) => set("ref", e.target.value)} />
           <Button data-testid="portal-done-button" variant="outline" disabled={!!busy} onClick={() => run("portal", () => api.post(`/loads/${loadId}/billing/portal-submitted`, { reference: f.ref }), "Submission recorded")}>Record submission</Button></>}
         {job && ["uncertain", "failed"].includes(job.status) && <>
           <span className="self-center text-xs text-rose-700">{job.status === "uncertain" ? "The provider did not confirm. Check with the payor before resending." : `Failed: ${job.error}`}</span>
-          <Input data-testid="reconcile-ref-input" className="w-56" placeholder="How you confirmed it arrived" value={f.ref} onChange={(e) => set("ref", e.target.value)} />
-          <Button size="sm" variant="outline" data-testid="reconcile-accepted-button" onClick={() => run("rec", () => api.post(`/outbox/${job.id}/resolve`, { action: "mark_accepted", reference: f.ref }), "Marked as received")}><CheckCircle2 className="mr-1 h-4 w-4" />It arrived</Button>
+          <Input data-testid="reconcile-ref-input" className="w-56" placeholder="How you confirmed it arrived" value={f.recRef || ""} onChange={(e) => set("recRef", e.target.value)} />
+          <Button size="sm" variant="outline" data-testid="reconcile-accepted-button" onClick={() => run("rec", () => api.post(`/outbox/${job.id}/resolve`, { action: "mark_accepted", reference: f.recRef }), "Marked as received")}><CheckCircle2 className="mr-1 h-4 w-4" />It arrived</Button>
           <Button size="sm" variant="outline" data-testid="reconcile-retry-button" onClick={() => run("rec", () => api.post(`/outbox/${job.id}/resolve`, { action: "retry" }), "Retry started")}><RefreshCcw className="mr-1 h-4 w-4" />Send again</Button></>}
       </div>
       {sub.state === "accepted" && <p data-testid="submission-accepted-note" className="mt-2 text-xs text-muted-foreground">{sub.simulated ? "SIMULATED submission recorded" : "Accepted by the email provider"} {fmtTime(sub.accepted_at, tz)} to {sub.to || sub.channel} · ref {sub.provider_ref}. Acceptance is not proof of delivery, approval or payment.</p>}
@@ -165,6 +165,7 @@ export function BillingPanel({ api, loadId, tz, stops, onChanged }) {
       <div className="mt-5 grid gap-3 md:grid-cols-2">
         {finalOpen && <div className="rounded-xl border p-3 text-xs" data-testid="manual-complete-card">
           <div className="font-semibold">GPS failed? Complete the load manually</div>
+          <p className="mt-1 text-muted-foreground">Times are entered in your computer's time zone.</p>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <label>Final stop arrival<Input type="datetime-local" data-testid="manual-arrived-input" value={f.arrived} onChange={(e) => set("arrived", e.target.value)} /></label>
             <label>Final stop departure<Input type="datetime-local" data-testid="manual-departed-input" value={f.departed} onChange={(e) => set("departed", e.target.value)} /></label>

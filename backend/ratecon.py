@@ -49,7 +49,7 @@ PROMPT = """Read the attached rate confirmation and return this JSON exactly (ke
     "submission_other_text": string|null,    // e.g. 'mail originals to ...', 'upload in Navisphere'
     "requires_attachment": boolean|null,     // invoice/docs must be attached to the email
     "notice_recipient": string|null,         // who must be told about detention (email or phone or name)
-    "notice_method": "email"|"phone"|"portal"|"other"|null,
+    "notice_method": "email"|"phone"|"portal"|"other"|null,  // 'in writing'/'written notice' -> email unless fax/mail/portal is named
     "invoice_deadline_days": number|null,    // e.g. 'invoice within 30 days of delivery' -> 30
     "invoice_deadline_trigger": "delivery"|"departure"|"pod_receipt"|"other"|null,
     "deadline_timezone": string|null,

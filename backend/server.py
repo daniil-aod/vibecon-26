@@ -1335,7 +1335,8 @@ def reminder_plan(inv, terms: dict | None = None):
 @api.get("/invoices")
 async def list_invoices(m: dict = Depends(fleet_member)):
     invs = await db.invoices.find({"fleet_id": m["fleet_id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return [{**i, "reminder_plan": reminder_plan(i), "evidence_url": evidence_url(m["fleet"], i)} for i in invs if i["status"] != "void"]
+    pkt = {x["id"] for x in await db.loads.find({"fleet_id": m["fleet_id"], "billing_setup": {"$exists": True}}, {"_id": 0, "id": 1}).to_list(5000)}
+    return [{**i, "packet_billed": i["load_id"] in pkt, "reminder_plan": reminder_plan(i), "evidence_url": evidence_url(m["fleet"], i)} for i in invs if i["status"] != "void"]
 
 
 @api.get("/invoices/{inv_id}")
@@ -1372,6 +1373,14 @@ async def send_invoice(inv_id: str, m: dict = Depends(fleet_member)):
     if inv["status"] not in ("ready", "sent"):
         raise HTTPException(status_code=400, detail=f"Invoice is {inv['status']}")
     fleet, load, stop, notices, pb = await invoice_context(inv)
+    if load.get("billing_setup"):
+        dst = finalize.destination(load)
+        if inv.get("packet_id") or finalize.transport_state(load)["state"] == "completed":
+            raise HTTPException(status_code=400, detail="This load is billed with a billing packet. Use 'Completion & billing' on the load page "
+                                                        "so documents, approvals, the payor's AP address and review rules are applied.")
+        # early (e.g. pickup) submission before the load completes: only to the confirmed AP email destination
+        if not (load["billing_setup"].get("confirmed_at") and dst["channel"] == "email" and dst["recipient"]):
+            raise HTTPException(status_code=400, detail="Confirm an email billing destination for this load before sending an early invoice")
     to = ((load.get("broker") or {}).get("email") or "").strip()
     if not to:
         raise HTTPException(status_code=400, detail="Add the broker's email on the load first")
@@ -2252,6 +2261,7 @@ async def adjust_invoice(inv_id: str, body: RefIn, m: dict = Depends(fleet_membe
     await db.invoices.insert_one(dict(new))
     await db.invoices.update_one({"id": inv_id}, {"$unset": {"pending_adjustment": ""}, "$push": {"history": {
         "at": iso(now_utc()), "action": "corrected_by", "note": f"{new['number']} ({new['kind']}): {body.note.strip()}", "by": m["user_id"]}}})
+    await finalize.finalize_load(inv["load_id"], "invoice_correction", m["user_id"])
     return new
 
 

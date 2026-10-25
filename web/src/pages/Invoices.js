@@ -72,11 +72,12 @@ export default function Invoices() {
                 <div className="hidden md:block"><Reminders inv={inv} /></div>
                 <div className="flex items-center justify-end gap-2">
                   <span className="num font-mono text-sm md:hidden">{money(inv.amount)}</span>
-                  {inv.status === "ready" && <Button data-testid={`invoice-send-${inv.id}`} size="sm" onClick={() => send(inv)}><Send className="mr-1.5 h-3.5 w-3.5" />Send</Button>}
+                  {inv.status === "ready" && !inv.packet_billed && <Button data-testid={`invoice-send-${inv.id}`} size="sm" onClick={() => send(inv)}><Send className="mr-1.5 h-3.5 w-3.5" />Send</Button>}
+                  {inv.status === "ready" && inv.packet_billed && <Button asChild size="sm" variant="outline"><a data-testid={`invoice-bill-via-load-${inv.id}`} href={`/app/loads/${inv.load_id}`}>Bill via packet</a></Button>}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild><Button data-testid={`invoice-actions-${inv.id}`} size="icon" variant="ghost"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-52">
-                      {inv.status === "sent" && <DropdownMenuItem data-testid="invoice-action-resend" onClick={() => send(inv)}><Send className="mr-2 h-4 w-4" />Re-send to broker</DropdownMenuItem>}
+                      {inv.status === "sent" && !inv.packet_id && <DropdownMenuItem data-testid="invoice-action-resend" onClick={() => send(inv)}><Send className="mr-2 h-4 w-4" />Re-send to broker</DropdownMenuItem>}
                       {inv.status !== "ready" && <DropdownMenuItem asChild><a href={inv.evidence_url} target="_blank" rel="noreferrer" data-testid="invoice-action-evidence"><ExternalLink className="mr-2 h-4 w-4" />Open evidence page</a></DropdownMenuItem>}
                       <DropdownMenuItem data-testid="invoice-action-pdf" onClick={() => pdf(inv)}><FileDown className="mr-2 h-4 w-4" />Preview PDF packet</DropdownMenuItem>
                       <DropdownMenuSeparator />
@@ -84,7 +85,7 @@ export default function Invoices() {
                         ? <DropdownMenuItem data-testid="invoice-action-resume" onClick={() => status(inv, "resume", "Reminders resumed")}><PlayCircle className="mr-2 h-4 w-4" />Resume reminders</DropdownMenuItem>
                         : <DropdownMenuItem data-testid="invoice-action-pause" onClick={() => status(inv, "pause", "Reminders paused")}><PauseCircle className="mr-2 h-4 w-4" />Pause reminders</DropdownMenuItem>)}
                       {["sent", "disputed", "ready"].includes(inv.status) && <DropdownMenuItem data-testid="invoice-action-mark-paid" onClick={() => setPaid({ inv, method: "check" })}><CheckCircle2 className="mr-2 h-4 w-4" />Mark paid…</DropdownMenuItem>}
-                      {inv.status === "sent" && <DropdownMenuItem data-testid="invoice-action-dispute" onClick={() => status(inv, "dispute", "Marked disputed")}><AlertOctagon className="mr-2 h-4 w-4" />Mark disputed</DropdownMenuItem>}
+                      {inv.status === "sent" && !inv.packet_id && <DropdownMenuItem data-testid="invoice-action-dispute" onClick={() => status(inv, "dispute", "Marked disputed")}><AlertOctagon className="mr-2 h-4 w-4" />Mark disputed</DropdownMenuItem>}
                       {["sent", "disputed", "ready"].includes(inv.status) && <DropdownMenuItem data-testid="invoice-action-write-off" onClick={() => status(inv, "write_off", "Written off")}><Ban className="mr-2 h-4 w-4" />Write off</DropdownMenuItem>}
                       {["disputed", "written_off", "paid"].includes(inv.status) && <DropdownMenuItem data-testid="invoice-action-reopen" onClick={() => status(inv, "reopen", "Reopened")}><RotateCcw className="mr-2 h-4 w-4" />Reopen</DropdownMenuItem>}
                     </DropdownMenuContent>
@@ -122,7 +123,7 @@ export default function Invoices() {
               </div>
               <div><div className="mb-2 font-medium">Follow-up sequence</div>
                 <div className="space-y-1.5">{detail.reminder_plan.map((r) => (
-                  <div key={r.day} className="flex justify-between rounded-lg border px-3 py-2"><span>Day {r.day}</span><span className="font-mono text-xs">{r.sent ? `sent ${fmtTime(r.sent_at, tz)}` : r.due_at ? `due ${fmtTime(r.due_at, tz)}` : "starts when sent"}</span></div>))}</div></div>
+                  <div key={r.day} className="flex justify-between rounded-lg border px-3 py-2"><span>{r.label ? `${r.label} · day ${r.day}` : `Day ${r.day}`}</span><span className="font-mono text-xs">{r.sent ? `sent ${fmtTime(r.sent_at, tz)}` : r.due_at ? `due ${fmtTime(r.due_at, tz)}` : "starts when sent"}</span></div>))}</div></div>
               <div><div className="mb-2 font-medium">History</div>
                 <ol className="space-y-1 font-mono text-xs text-muted-foreground">{(detail.history || []).map((h, i) => <li key={i}>{fmtTime(h.at, tz)} · {h.action.replace(/_/g, " ")}{h.to ? ` → ${h.to}` : ""}</li>)}
                   {!(detail.history || []).length && <li>Not sent yet.</li>}</ol></div>
