@@ -8,7 +8,7 @@ import type { Fix, Stop } from "@/src/lib/api";
 export function FacilityMap({ stop, truck, height = 200, testID }: { stop: Stop; truck: Fix | null; height?: number; testID: string }) {
   const ref = useRef<WebView>(null);
   const html = useMemo(() => {
-    const lat = stop.lat ?? 39.5, lng = stop.lng ?? -98.35, r = stop.radius_m || 300;
+    const lat = stop.lat ?? 39.5, lng = stop.lng ?? -98.35, r = stop.radius_m || 45;
     return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

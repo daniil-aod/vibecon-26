@@ -1,0 +1,35 @@
+{
+  "summary": "All iteration 12 follow-ups are verified. (1) HIGH fixed: e38e91c9 is now in EXPO_PUBLIC_EXTRA_API_HOSTS. I pasted the e38e91c9 /api/open link on the home screen at 390x844 and every /api request went to e38e91c9, which serves the LOCAL backend (45 m zones, ride routes). Start ride, entering the pickup zone (zone timer shown), leaving about 100 m out (zone timer gone, departed_source=geofence) and End ride (ride.ended_at set) all worked. Reopening /d/<token> without the api param reused the remembered e38e91c9 host, and the ended ride persisted ('Tracking finished', no pings sent while inside the delivery zone). The remote naughty-hugle-13 TEST-0001 was read only (GET) and is unchanged. (2) update_load re-applies the radius only when it changed: an unchanged save keeps the per-stop tweak [80, 200], a changed value applies to all stops, and an invalid change returns 400 with the stored value kept. (3) create_load with radius 5 returns 400 and writes no facilities; the default is 45. (4) A ping with accuracy 0 is stored as 0 (no arrival 50 m out); a missing accuracy is stored as 50. (5) After the ride ends, a ping inside the zone is stored with stop_id=None and triggers no event or arrival. (6) The 45 m fallbacks are in FacilityMap.tsx, [token].tsx, pdfgen.py and Evidence.js, the LoadDetail slider max is 3000, and no '300' radius fallbacks remain. Backend suite run with -n 0: 90/93 passed. The 3 failures are in test_driver_emails and are caused by the email provider returning 429 rate_limited, which I confirmed with a direct probe; they are not caused by this change. Local TEST-0001 was reset at the end.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/driver/{tok}/stops/{id}/tap/{action}", "issue": "Pings from driver taps are still stored with 'body.accuracy or 50', which turns accuracy 0 into 50. This does not match the driver_ping fix. server.py:1247"},
+      {"endpoint": "PUT /api/loads/{id}", "issue": "The changed radius is validated (_apply_radius) only after build_stops, which may already have called upsert_facility for new or moved stops. An invalid radius then returns 400 but leaves facility writes behind, the same problem that was fixed in create_load. server.py:567-570"},
+      {"endpoint": "PUT /api/loads/{id}", "issue": "Demo loads store geofence_radius_m=None, so the first save that sends 45 counts as a change and overwrites any per-stop radius tweaks. Compare against (stored or DEFAULT_RADIUS). server.py:569"},
+      {"endpoint": "send_driver_email", "issue": "The 'Email provider is busy (rate limited)' message never shows. emailer.py raises a generic 'Failed to send email' on a 429, so the check for '429' in the message at server.py:684 never matches. 3 tests in test_driver_emails fail because the external provider currently returns 429."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter13_followups.py", "/app/test_reports/pytest/pytest_iter13.xml", "/app/test_reports/pytest/pytest_iter13_existing.xml"],
+  "action_items": [
+    "LOW: Use the same accuracy-None check in driver_action as in driver_ping (server.py:1247).",
+    "LOW: In update_load, validate geofence_radius_m before build_stops.",
+    "LOW: In update_load, compare against (load.geofence_radius_m or DEFAULT_RADIUS) so a demo load with None does not overwrite per-stop radii on the first save.",
+    "LOW: Have emailer pass the 429 or rate-limit info into EmailError so the friendly 'rate limited' message works."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1873 lines; consider splitting the driver, loads and email routes into modules."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter13_followups.py"],
+  "success_rate": {"backend": "15/15 new tests pass; full suite 90/93 run with -n 0 (3 email tests fail on the provider's 429 rate limit, not on this change)", "frontend": "100% of the e38e91c9 link flow: requests went to the trusted host, and start, zone in/out and end ride work against the LOCAL backend"},
+  "seed_data_creation": "TEST_<tag> loads and facilities are created and cleaned up by the test module. Local TEST-0001 was reset at the end. The remote was not mutated.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "e38e91c9 and load-locator-4 both serve the LOCAL backend. Run pytest with -n 0 and EXPO_PUBLIC_BACKEND_URL exported. The email tests flake on the provider's 429. Use context.set_geolocation for pickup 41.525,-88.0817 (r45) and ~100 m out at 41.5259. Never POST to naughty-hugle-13.",
+  "rca_of_issue": ""
+}

@@ -79,6 +79,12 @@ End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads 
 - No git remote is configured in the workspace, so there was nothing to pull.
 - Tested: iteration_11 (63 backend tests, web checks pass).
 
+## 2026-06 — Round 8
+- Geofence default 45 m (15% of 300); load form field "Geofence radius (m)" (geofence_radius_m, 15–3000), applied to stops not yet arrived. Same crossing rules in backend zone_state and app zoneState: 25 m accuracy slack, 10 m exit buffer, fixes worse than 100 m ignored.
+- App forces an immediate ping on a zone crossing and processes every point in background batches.
+- POST /api/driver/{tok}/ride/start and /ride/end: End ride ends the main timer and stamps departure (source ride_end) for an open zone. The web timeline shows the ride start and end.
+
+
 
 
 

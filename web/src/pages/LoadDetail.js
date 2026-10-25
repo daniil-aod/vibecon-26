@@ -20,8 +20,8 @@ import { AuthImage } from "@/components/AuthImage";
 import LoadForm from "@/pages/LoadForm";
 import { DriverEmailCard } from "@/components/DriverEmailCard";
 
-const EVL = { arrival: [LogIn, "Arrived"], departure: [LogOut, "Departed"], free_time_expired: [Clock, "Free time ended"], notice_sent: [BellRing, "Broker notice sent"], bol_uploaded: [Camera, "BOL photo uploaded"] };
-const SRC = { geofence: "geofence", driver_tap: "driver tap + GPS", dispatcher_edit: "dispatcher edit" };
+const EVL = { arrival: [LogIn, "Arrived (entered zone)"], departure: [LogOut, "Departed (left zone)"], free_time_expired: [Clock, "Free time ended"], notice_sent: [BellRing, "Broker notice sent"], bol_uploaded: [Camera, "BOL photo uploaded"], ride_started: [Send, "Driver started ride"], ride_ended: [Clock, "Driver ended ride"] };
+const SRC = { geofence: "geofence", driver_tap: "driver tap + GPS", dispatcher_edit: "dispatcher edit", ride_end: "driver ended ride" };
 const toLocalInput = (iso) => { if (!iso) return ""; const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 
 export default function LoadDetail() {
@@ -64,7 +64,11 @@ export default function LoadDetail() {
 
   if (!load) return <div className="space-y-4"><Skeleton className="h-24" /><Skeleton className="h-80" /></div>;
   const det = load.detention || {};
-  const events = load.stops.flatMap((s) => (s.events || []).map((e) => ({ ...e, facility: s.facility_name }))).sort((a, b) => (a.at || "").localeCompare(b.at || ""));
+  const events = [
+    ...load.stops.flatMap((s) => (s.events || []).map((e) => ({ ...e, facility: s.facility_name }))),
+    ...(load.ride?.started_at ? [{ type: "ride_started", at: load.ride.started_at, facility: "driver app" }] : []),
+    ...(load.ride?.ended_at ? [{ type: "ride_ended", at: load.ride.ended_at, facility: "driver app" }] : []),
+  ].sort((a, b) => (a.at || "").localeCompare(b.at || ""));
 
   return (
     <div className="space-y-6">
@@ -110,7 +114,7 @@ export default function LoadDetail() {
                     <Row k="Detention" v={money(s.billing.amount)} strong testid={`stop-${i}-amount`} sub={s.billing.capped ? "cap reached" : ""} />
                     <div className="flex flex-wrap gap-2 pt-2">
                       <Button data-testid={`stop-${i}-adjust-button`} size="sm" variant="outline" onClick={() => setAdjust({ stop: s, arrived: toLocalInput(s.arrived_at), departed: toLocalInput(s.departed_at), reason: "" })}><Clock className="mr-1.5 h-3.5 w-3.5" />Adjust times</Button>
-                      <Button data-testid={`stop-${i}-geofence-button`} size="sm" variant="outline" onClick={() => setGeo({ facility_id: s.facility_id, name: s.facility_name, lat: s.lat ?? 39.5, lng: s.lng ?? -98.35, radius_m: s.radius_m || 300, type: s.type })}><Crosshair className="mr-1.5 h-3.5 w-3.5" />Geofence</Button>
+                      <Button data-testid={`stop-${i}-geofence-button`} size="sm" variant="outline" onClick={() => setGeo({ facility_id: s.facility_id, name: s.facility_name, lat: s.lat ?? 39.5, lng: s.lng ?? -98.35, radius_m: s.radius_m || 45, type: s.type })}><Crosshair className="mr-1.5 h-3.5 w-3.5" />Geofence</Button>
                       {onSite && !n.sent_at && <Button data-testid={`stop-${i}-send-notice-button`} size="sm" disabled={busy === `n${s.id}`} onClick={() => sendNotice(s)}><BellRing className="mr-1.5 h-3.5 w-3.5" />{n.status === "awaiting_approval" ? "Approve & send notice" : "Send notice now"}</Button>}
                     </div>
                   </div>
@@ -197,7 +201,7 @@ export default function LoadDetail() {
           {geo && <div className="space-y-4">
             <FacilityMap testid="geofence-edit-map" editable stops={[{ ...geo, id: "g" }]} height={320} onMove={(lat, lng) => setGeo({ ...geo, lat, lng })} />
             <div><Label>Radius: <span className="font-mono">{Math.round(geo.radius_m)} m</span></Label>
-              <Slider data-testid="geofence-radius-slider" className="mt-3" min={50} max={1500} step={25} value={[geo.radius_m]} onValueChange={([r]) => setGeo({ ...geo, radius_m: r })} /></div>
+              <Slider data-testid="geofence-radius-slider" className="mt-3" min={15} max={3000} step={5} value={[geo.radius_m]} onValueChange={([r]) => setGeo({ ...geo, radius_m: r })} /></div>
           </div>}
           <DialogFooter><Button variant="outline" onClick={() => setGeo(null)}>Cancel</Button><Button data-testid="geofence-save-button" onClick={saveGeo} disabled={busy === "geo"}>Save geofence</Button></DialogFooter>
         </DialogContent>

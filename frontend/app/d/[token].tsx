@@ -13,7 +13,7 @@ import { PressButton } from "@/src/components/PressButton";
 import { FacilityMap } from "@/src/components/FacilityMap";
 import { useToast } from "@/src/components/Toast";
 import { ApiError, driverApi, DriverPayload, errMsg, Fix, recallApi, rememberApi, resolveApi, Stop } from "@/src/lib/api";
-import { clearRide, getRide, getTrip, on, queuedCount, flushQueue, resumeTracking, Ride, startTracking, stopTracking, TrackingMode, tripComplete } from "@/src/lib/tracking";
+import { clearRide, getRide, getTrip, on, queuedCount, flushQueue, resumeTracking, Ride, startTracking, stopTracking, TrackingMode, tripComplete, watchZone } from "@/src/lib/tracking";
 import { useI18n } from "@/src/lib/i18n";
 import { LangToggle } from "@/src/components/LangToggle";
 import { TripSummary } from "@/src/components/TripSummary";
@@ -71,7 +71,7 @@ export default function DriverScreen() {
 
   const load = useCallback(async () => {
     if (!api) return;
-    try { setD(await driverApi.get(api, token)); setErr(null);
+    try { const p = await driverApi.get(api, token); setD(p); watchZone(p); setErr(null);
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) { setErr("invalid"); const t = await getTrip(); if (t?.token === token) await stopTracking("invalid"); }
       else if (!d) setErr(errMsg(e));
@@ -134,6 +134,8 @@ export default function DriverScreen() {
     const m = await startTracking(token, api);
     setMode(m);
     setRide(await getRide(token));
+    // Tell the backend the main trip timer started (web timeline shows it). Older backends without this route are fine.
+    driverApi.rideStart(api, token).then((p) => setD(p)).catch(() => {});
     setBgDenied(m === "foreground" && Platform.OS !== "web");
     toast.success(m === "background" ? L.toastStartedBg : L.toastStartedFg);
   };
@@ -191,6 +193,10 @@ export default function DriverScreen() {
     await flushQueue();
     await stopTracking("ended");
     setRide(await getRide(token));
+    // End the load's main timer on the backend too; this also closes any open zone (departure = now).
+    if (api) {
+      try { setD(await driverApi.rideEnd(api, token, pos)); } catch { /* older backend: local end only */ }
+    }
     toast.info(L.toastEnded);
   };
 
@@ -237,15 +243,18 @@ export default function DriverScreen() {
   const onSite = !!(cur?.arrived_at && !cur?.departed_at);
   const dwell = onSite && cur?.arrived_at ? (now - new Date(cur.arrived_at).getTime()) / 1000 : 0;
   const freeLeft = onSite && cur?.free_expires_at ? (new Date(cur.free_expires_at).getTime() - now) / 1000 : 0;
-  const away = cur && pos && cur.lat != null && cur.lng != null ? Math.max(0, dist(pos, { lat: cur.lat, lng: cur.lng }) - (cur.radius_m || 300)) : null;
+  const away = cur && pos && cur.lat != null && cur.lng != null ? Math.max(0, dist(pos, { lat: cur.lat, lng: cur.lng }) - (cur.radius_m || 45)) : null;
   const tracking = !!mode;
-  const rideSecs = ride ? ((ride.endedAt ? new Date(ride.endedAt).getTime() : now) - new Date(ride.startedAt).getTime()) / 1000 : 0;
+  // Same ride times as the web app when the backend has them; local record otherwise.
+  const srv = d.ride?.started_at ? { startedAt: d.ride.started_at, endedAt: d.ride.ended_at || undefined } : null;
+  const shownRide: Ride | null = tracking ? (srv && !srv.endedAt ? srv : ride) : (srv?.endedAt ? srv : ride);
+  const rideSecs = shownRide ? ((shownRide.endedAt ? new Date(shownRide.endedAt).getTime() : now) - new Date(shownRide.startedAt).getTime()) / 1000 : 0;
   const complete = tripComplete(d);
 
   const gpsTone = issue ? styles.chipWarn : !tracking ? styles.chipIdle : pos ? styles.chipOk : styles.chipIdle;
   const gpsText = issue === "blocked" ? L.gpsBlocked
     : issue === "services" ? L.gpsServices
-    : !tracking ? (ride?.endedAt ? L.gpsFinished : L.gpsIdle)
+    : !tracking ? (shownRide?.endedAt ? L.gpsFinished : L.gpsIdle)
     : pos ? `${L.gpsOn} · ±${Math.round(pos.accuracy)} m · ${preciseOff ? L.approximate : L.precise} · ${mode === "background" ? L.canLock : L.keepOpen}`
     : L.gpsFinding;
   const stopType = (s: string) => (s === "pickup" ? L.pickup : s === "delivery" ? L.delivery : s);
@@ -324,7 +333,7 @@ export default function DriverScreen() {
           </View>
         )}
 
-        {!tracking && !ride?.endedAt && (
+        {!tracking && !shownRide?.endedAt && (
           <Animated.View entering={FadeInDown.duration(350)} style={styles.px}>
             <View style={styles.startCard} testID="driver-start-card">
               <Text style={styles.startK}>{L.readyK}</Text>
@@ -336,22 +345,22 @@ export default function DriverScreen() {
           </Animated.View>
         )}
 
-        {ride && (
+        {shownRide && (
           <View style={styles.px}>
             <View style={styles.timer} testID="driver-ride-timer">
-              <Text style={styles.timerSub}>{ride.endedAt ? L.rideEndedAt(fmtClock(ride.endedAt)) : L.rideSince(fmtClock(ride.startedAt))}</Text>
+              <Text style={styles.timerSub}>{shownRide.endedAt ? L.rideEndedAt(fmtClock(shownRide.endedAt)) : L.rideSince(fmtClock(shownRide.startedAt))}</Text>
               <Text style={styles.timerNum} testID="driver-ride-time">{clock(rideSecs)}</Text>
-              {onSite && cur && !ride.endedAt ? (
+              {onSite && cur && !shownRide.endedAt ? (
                 <Animated.View entering={FadeIn} style={styles.zoneBox} testID="driver-zone-timer">
                   <Text style={styles.zoneK}>{L.inZoneFor} · {cur.facility_name}</Text>
                   <Text style={styles.zoneNum} testID="driver-zone-time">{clock(dwell)}</Text>
                   <Text style={[styles.zoneSub, { color: freeLeft > 0 ? colors.warningGlow : colors.successGlow }]}>{freeLeft > 0 ? `${L.freeLeft} ${clock(freeLeft)}` : L.detentionRunning}</Text>
                 </Animated.View>
-              ) : !ride.endedAt ? (
+              ) : !shownRide.endedAt ? (
                 <Text style={styles.zoneIdle} testID="driver-zone-idle">{cur ? L.zoneWaiting : L.allZonesDone}</Text>
               ) : null}
             </View>
-            {ride.endedAt && cur && !tracking && (
+            {shownRide.endedAt && cur && !tracking && (
               <Pressable testID="driver-restart-ride-button" onPress={start} style={styles.resetBtn}>
                 <Text style={styles.link}>{L.restartRide}</Text>
               </Pressable>

@@ -48,7 +48,7 @@ export const FacilityMap = ({ stops = [], trail = [], truck, height = 260, edita
         <FitBounds points={pts} />
         {editable && <ClickToMove onMove={onMove} />}
         {stops.filter((s) => s.lat != null).map((s, i) => (
-          <Circle key={s.id || i} center={[s.lat, s.lng]} radius={s.radius_m || 300} pathOptions={geofenceStyle}>
+          <Circle key={s.id || i} center={[s.lat, s.lng]} radius={s.radius_m || 45} pathOptions={geofenceStyle}>
             <Tooltip direction="top">{s.facility_name}</Tooltip>
           </Circle>
         ))}
@@ -71,7 +71,7 @@ export const FleetMap = ({ facilities = [], trucks = [], height = 420 }) => {
         <TileLayer url={TILE} attribution={ATTR} />
         <FitBounds points={pts} maxZoom={12} />
         {facilities.map((f) => (
-          <Circle key={f.id} center={[f.lat, f.lng]} radius={f.radius_m || 300} pathOptions={geofenceStyle}>
+          <Circle key={f.id} center={[f.lat, f.lng]} radius={f.radius_m || 45} pathOptions={geofenceStyle}>
             <Tooltip>{f.name}</Tooltip>
           </Circle>
         ))}

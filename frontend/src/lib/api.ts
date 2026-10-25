@@ -14,6 +14,7 @@ export type Stop = {
 export type DriverPayload = {
   load_number: string; fleet_name: string; driver_name?: string | null;
   free_time_hours?: number; requires_signed_bol?: boolean; test_load?: boolean; stops: Stop[]; event?: string | null;
+  ride?: { started_at?: string | null; ended_at?: string | null } | null;
 };
 export type Fix = { lat: number; lng: number; accuracy: number; ts?: string };
 
@@ -63,6 +64,8 @@ const json = (body: unknown): RequestInit => ({ method: "POST", headers: { "Cont
 
 export const driverApi = {
   get: (api: string, tok: string) => request<DriverPayload>(api, `/driver/${tok}`),
+  rideStart: (api: string, tok: string) => request<DriverPayload>(api, `/driver/${tok}/ride/start`, { method: "POST" }),
+  rideEnd: (api: string, tok: string, fix?: Fix | null) => request<DriverPayload>(api, `/driver/${tok}/ride/end`, json(fix ? { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy } : {})),
   resetTest: (api: string, tok: string) => request<DriverPayload>(api, `/driver/${tok}/reset-test`, { method: "POST" }),
   ping: (api: string, tok: string, fix: Fix) => request<DriverPayload>(api, `/driver/${tok}/ping`, json(fix)),
   tap: (api: string, tok: string, stopId: string, action: "arrive" | "depart", fix: Fix) =>

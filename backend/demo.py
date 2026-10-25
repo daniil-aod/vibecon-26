@@ -30,7 +30,7 @@ from storage import put_object, APP_NAME
 
 DEMO_FLEET_ID = "demo-dockclock-fleet"
 DEMO_OWNER_EMAIL = "abdowns4@gmail.com"
-DEMO_VERSION = 4  # bump to force a rebuild on next startup when features change
+DEMO_VERSION = 5  # bump to force a rebuild on next startup when features change
 PREVIEW_URL = "https://load-locator-4.preview.emergentagent.com"
 
 # collections that hold demo-fleet-scoped data (everything keyed by fleet_id)
@@ -219,8 +219,8 @@ def make_trail(fleet_id, load_id, stop, arrived_dt, end_dt, departing=True):
     for i in range(n + 1):
         t = arrived_dt + timedelta(minutes=dwell_min * i / n)
         pings.append(_ping(fleet_id, load_id, stop["id"],
-                           lat + rnd.uniform(-0.0009, 0.0009),
-                           lng + rnd.uniform(-0.0009, 0.0009),
+                           lat + rnd.uniform(-0.0002, 0.0002),
+                           lng + rnd.uniform(-0.0002, 0.0002),
                            t, rnd.randint(10, 24)))
     # depart to the NE
     if departing:
@@ -323,7 +323,7 @@ class _Seeder:
             self.facs[key] = {"id": _uid(), "fleet_id": self.fid,
                               "key": "".join(ch for ch in (f["name"] + f["address"]).lower() if ch.isalnum()),
                               "name": f["name"], "address": f["address"], "lat": f["lat"], "lng": f["lng"],
-                              "radius_m": 300, "created_at": iso(now_utc())}
+                              "radius_m": 45, "created_at": iso(now_utc())}
         return self.facs[key]
 
     def broker_id(self, key):
@@ -342,7 +342,7 @@ class _Seeder:
         src = "geofence" if geofence else "driver_tap"
         coords = {"lat": fac["lat"], "lng": fac["lng"], "accuracy": 16} if geofence else None
         stop = {"id": _uid(), "seq": seq, "type": type_, "facility_id": fac["id"], "facility_name": fac["name"],
-                "address": fac["address"], "appointment": appt, "lat": fac["lat"], "lng": fac["lng"], "radius_m": 300,
+                "address": fac["address"], "appointment": appt, "lat": fac["lat"], "lng": fac["lng"], "radius_m": 45,
                 "arrived_at": iso(arrived) if arrived else None, "departed_at": iso(departed) if departed else None,
                 "arrived_source": src if arrived else None, "departed_source": src if departed else None,
                 "arrived_coords": coords if arrived else None, "departed_coords": coords if departed else None,

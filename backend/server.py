@@ -49,7 +49,24 @@ STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 app = FastAPI(title="DockClock")
 api = APIRouter(prefix="/api")
 
-DEFAULT_RADIUS = 300
+DEFAULT_RADIUS = 45  # metres (15% of the old 300 m default); per-load override via geofence_radius_m
+RADIUS_MIN, RADIUS_MAX = 15, 3000
+# Geofence crossing rules (mirrored in the driver app, frontend/src/lib/tracking.ts):
+ACC_SLACK_M = 25      # at most this much GPS error is credited toward being inside
+EXIT_BUFFER_M = 10    # must be this far past the edge to count as exited (stops GPS jitter flapping)
+MAX_FIX_ACC_M = 100   # fixes worse than this can't decide a crossing
+
+
+def zone_state(dist_m: float, acc: float, radius: float) -> Optional[str]:
+    """'inside' / 'outside' for a fix against a geofence, or None if the fix is too inaccurate to decide."""
+    if acc > MAX_FIX_ACC_M:
+        return None
+    d = dist_m - min(acc, ACC_SLACK_M)
+    if d <= radius:
+        return "inside"
+    if d > radius + EXIT_BUFFER_M:
+        return "outside"
+    return None
 
 
 def uid() -> str:
@@ -387,6 +404,18 @@ class LoadIn(BaseModel):
     stops: List[StopIn] = []
     driver: DriverIn = DriverIn()
     low_confidence: List[str] = []
+    geofence_radius_m: Optional[float] = None
+
+
+def _apply_radius(stops: list, radius: Optional[float]):
+    """Load-level geofence size from the load form; stops already arrived keep the zone they were judged by."""
+    if radius is None:
+        return
+    if not (RADIUS_MIN <= radius <= RADIUS_MAX):
+        raise HTTPException(status_code=400, detail=f"Geofence radius must be {RADIUS_MIN}-{RADIUS_MAX} m")
+    for s in stops:
+        if not s.get("arrived_at"):
+            s["radius_m"] = float(radius)
 
 
 async def upsert_facility(fleet_id: str, s: dict) -> dict:
@@ -454,10 +483,13 @@ async def build_stops(fleet_id: str, stops_in: List[StopIn], existing: Optional[
 async def create_load(body: LoadIn, m: dict = Depends(fleet_member)):
     if not body.stops:
         raise HTTPException(status_code=400, detail="Add at least one stop")
+    _apply_radius([], body.geofence_radius_m)  # validate before anything is written
     d = body.model_dump()
     stops = await build_stops(m["fleet_id"], body.stops)
+    _apply_radius(stops, body.geofence_radius_m)
     broker_id = await upsert_broker(m["fleet_id"], d["broker"])
     load = {"id": uid(), "fleet_id": m["fleet_id"], "load_number": d.get("load_number") or f"LOAD-{secrets.token_hex(3).upper()}",
+            "geofence_radius_m": body.geofence_radius_m or DEFAULT_RADIUS,
             "carrier_name": d.get("carrier_name"), "linehaul_amount": d.get("linehaul_amount"),
             "broker": d["broker"], "broker_id": broker_id, "detention": d["detention"], "stops": stops,
             "driver": d["driver"], "driver_token": token(), "ratecon_file_id": body.file_id,
@@ -533,9 +565,15 @@ async def load_detail(load_id: str, m: dict = Depends(fleet_member)):
 async def update_load(load_id: str, body: LoadIn, m: dict = Depends(fleet_member)):
     load = await get_load(load_id, m["fleet_id"])
     d = body.model_dump()
+    radius_changed = body.geofence_radius_m is not None and body.geofence_radius_m != (load.get("geofence_radius_m") or DEFAULT_RADIUS)
+    if radius_changed:
+        _apply_radius([], body.geofence_radius_m)  # validate before anything is written
     stops = await build_stops(m["fleet_id"], body.stops, load.get("stops"))
+    if radius_changed:
+        _apply_radius(stops, body.geofence_radius_m)  # only when the dispatcher changed it (keeps per-facility tweaks)
     broker_id = await upsert_broker(m["fleet_id"], d["broker"])
     upd = {"load_number": d.get("load_number") or load["load_number"], "carrier_name": d.get("carrier_name"),
+           "geofence_radius_m": body.geofence_radius_m or load.get("geofence_radius_m") or DEFAULT_RADIUS,
            "linehaul_amount": d.get("linehaul_amount"), "broker": d["broker"], "broker_id": broker_id,
            "detention": d["detention"], "stops": stops, "driver": d["driver"], "updated_at": iso(now_utc())}
     # recompute notice due times for on-site stops
@@ -879,8 +917,8 @@ async def patch_facility(fac_id: str, body: FacilityPatch, m: dict = Depends(fle
     if not fac:
         raise HTTPException(status_code=404, detail="Facility not found")
     upd = {k: v for k, v in body.model_dump().items() if v is not None}
-    if "radius_m" in upd and not (50 <= upd["radius_m"] <= 3000):
-        raise HTTPException(status_code=400, detail="Radius must be between 50 and 3000 meters")
+    if "radius_m" in upd and not (RADIUS_MIN <= upd["radius_m"] <= RADIUS_MAX):
+        raise HTTPException(status_code=400, detail=f"Radius must be between {RADIUS_MIN} and {RADIUS_MAX} meters")
     await db.facilities.update_one({"id": fac_id}, {"$set": upd})
     # propagate to stops that have not been arrived at yet
     loads = await db.loads.find({"fleet_id": m["fleet_id"], "stops.facility_id": fac_id}, {"_id": 0}).to_list(500)
@@ -1031,10 +1069,47 @@ def driver_payload(load, fleet):
             "free_time_hours": (load.get("detention") or {}).get("free_time_hours"),
             "requires_signed_bol": (load.get("detention") or {}).get("requires_signed_bol"),
             "test_load": bool(load.get("is_test_load")),
+            "ride": load.get("ride") or None,
             "stops": [{k: s.get(k) for k in ("id", "seq", "type", "facility_name", "address", "appointment", "lat", "lng",
                                             "radius_m", "arrived_at", "departed_at", "arrived_source", "departed_source")}
                       | {"bol_count": len(s.get("bol", [])), "free_expires_at": s["billing"].get("free_expires_at"),
                          "notice_sent_at": s["notice"].get("sent_at")} for s in stops]}
+
+
+@api.post("/driver/{tok}/ride/start")
+async def driver_ride_start(tok: str):
+    """Driver pressed Start ride: the load's main trip timer begins (shown on the web timeline too)."""
+    load = await load_by_driver_token(tok)
+    ride = load.get("ride") or {}
+    if not ride.get("started_at") or ride.get("ended_at"):
+        ride = {"started_at": iso(now_utc()), "ended_at": None}
+        await db.loads.update_one({"id": load["id"]}, {"$set": {"ride": ride, "updated_at": iso(now_utc())}})
+    fleet = await db.fleets.find_one({"id": load["fleet_id"]}, {"_id": 0})
+    return driver_payload(await load_by_driver_token(tok), fleet)
+
+
+class RideEndIn(BaseModel):
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    accuracy: Optional[float] = None
+
+
+@api.post("/driver/{tok}/ride/end")
+async def driver_ride_end(tok: str, body: RideEndIn = RideEndIn()):
+    """Driver pressed End ride: stops the main timer AND closes any open zone (departure stamped now)."""
+    load = await load_by_driver_token(tok)
+    fleet = await db.fleets.find_one({"id": load["fleet_id"]}, {"_id": 0})
+    now = now_utc()
+    coords = {"lat": body.lat, "lng": body.lng, "accuracy": body.accuracy} if body.lat is not None else None
+    for s in load.get("stops", []):
+        if s.get("arrived_at") and not s.get("departed_at"):
+            await record_departure(load, s, now, "ride_end", coords, fleet, note="Driver ended the ride inside the zone")
+    ride = load.get("ride") or {}
+    ride = {"started_at": ride.get("started_at") or iso(now), "ended_at": iso(now)}
+    await db.loads.update_one({"id": load["id"]}, {"$set": {"ride": ride, "updated_at": iso(now)}})
+    load = await load_by_driver_token(tok)
+    await process_load(load, fleet)
+    return driver_payload(await load_by_driver_token(tok), fleet)
 
 
 @api.post("/driver/{tok}/reset-test")
@@ -1047,7 +1122,7 @@ async def driver_reset_test(tok: str):
         s.update({"arrived_at": None, "departed_at": None, "arrived_source": None, "departed_source": None,
                   "arrived_coords": None, "departed_coords": None, "events": [], "bol": [],
                   "notice": {"status": "pending", "due_at": None, "sent_at": None}})
-    await db.loads.update_one({"id": load["id"]}, {"$set": {"stops": load["stops"], "last_ping": None, "updated_at": iso(now_utc())}})
+    await db.loads.update_one({"id": load["id"]}, {"$set": {"stops": load["stops"], "last_ping": None, "ride": None, "updated_at": iso(now_utc())}})
     await db.pings.delete_many({"load_id": load["id"]})
     await db.invoices.delete_many({"load_id": load["id"]})
     await db.notices.delete_many({"load_id": load["id"]})
@@ -1120,19 +1195,21 @@ async def driver_ping(tok: str, body: PingIn):
     load = await load_by_driver_token(tok)
     fleet = await db.fleets.find_one({"id": load["fleet_id"]}, {"_id": 0})
     ts = _ping_time(body.ts)
-    acc = body.accuracy or 50
+    acc = 50 if body.accuracy is None else body.accuracy
     stop = _current_stop(load)
     event = None
+    if (load.get("ride") or {}).get("ended_at"):
+        stop = None  # ride ended: keep the point for the trail, but no more zone events
     if stop is not None and stop.get("lat") is not None:
         dist = haversine_m(body.lat, body.lng, stop["lat"], stop["lng"])
         radius = float(stop.get("radius_m") or DEFAULT_RADIUS)
         coords = {"lat": body.lat, "lng": body.lng, "accuracy": acc}
         arrived = parse(stop.get("arrived_at")) if stop.get("arrived_at") else None
-        if not stop.get("arrived_at") and dist - min(acc, 100) <= radius and acc <= 500:
+        zs = zone_state(dist, acc, radius)
+        if not stop.get("arrived_at") and zs == "inside":
             await record_arrival(load, stop, ts, "geofence", coords, fleet)
             event = "arrived"
-        elif (arrived and ts > arrived and not stop.get("departed_at")
-              and dist - min(acc, 100) > radius + 150 and acc <= 300):
+        elif arrived and ts > arrived and not stop.get("departed_at") and zs == "outside":
             await record_departure(load, stop, ts, "geofence", coords, fleet)
             event = "departed"
     await db.pings.insert_one({"load_id": load["id"], "fleet_id": load["fleet_id"], "lat": body.lat, "lng": body.lng,
@@ -1170,7 +1247,7 @@ async def driver_action(tok: str, stop_id: str, action: str, body: PingIn):
             raise HTTPException(status_code=400, detail="Departure already recorded")
         await record_departure(load, stop, ts, "driver_tap", coords, fleet)
     await db.pings.insert_one({"load_id": load["id"], "fleet_id": load["fleet_id"], "lat": body.lat, "lng": body.lng,
-                               "accuracy": body.accuracy or 50, "ts": iso(ts), "stop_id": stop_id})
+                               "accuracy": 50 if body.accuracy is None else body.accuracy, "ts": iso(ts), "stop_id": stop_id})
     load = await load_by_driver_token(tok)
     await process_load(load, fleet)
     return driver_payload(await load_by_driver_token(tok), fleet)

@@ -39,7 +39,7 @@ class TestGeofenceTrip:
         d = requests.get(f"{BASE_URL}/api/driver/{TOK}", timeout=30).json()
         assert d["test_load"] is True and d["requires_signed_bol"] is True
         s0, s1 = sorted(d["stops"], key=lambda s: s["seq"])
-        assert (s0["lat"], s0["lng"], s0["radius_m"]) == (PICK[0], PICK[1], 300)
+        assert (s0["lat"], s0["lng"], s0["radius_m"]) == (PICK[0], PICK[1], 45)
         assert (s1["lat"], s1["lng"]) == DELIV
         assert all(not s["arrived_at"] for s in d["stops"])
 
