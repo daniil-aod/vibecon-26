@@ -1,0 +1,34 @@
+{
+  "summary": "Tested the geofence trip that can start from anywhere on the LOCAL TEST-0001 load. All mutations ran on the local backend; the remote backend only received GETs plus one CORS OPTIONS preflight. Backend: the new tests/test_geofence_trip.py passes 11/11. It covers the fresh payload with fixed stop coordinates, a far-away ping with no arrival and no anchoring, a geofence arrival with free_expires_at at arrival + 2h, a 400 m accuracy ping that does not depart, a ~1 km move that departs, delivery in then out, a ping accepted after every stop is departed, the BOL upload, reset, and remote GET RL-55018 plus CORS. Frontend web at 390x844 with mocked geolocation: pasted the /api/open link and Open load went to /d/<tok>?api=<local host>. Start at 41.88,-87.63 turned tracking on with 'Heading to · Pickup', no arrival, '33.7 mi from the geofence' and the End trip button showing. Entering the pickup zone stamped arrival by geofence, with the on-site timer and 'Free time left 01:59:54'. Leaving by ~1 km made delivery the current stop. Delivery in then out kept tracking ON, the note showed 'Last step: attach the photo of the signed BOL...', and pings kept going (5→6). Uploading the BOL through the web file chooser showed 'BOL attached (1)', the GPS chip changed to 'Tracking finished', the End trip button disappeared, and no more pings were sent. Mongo: 6 pings, all stamps from geofence, BOL 1. End trip fail-safe: the sheet opens; Keep tracking leaves tracking on (pings continue); End trip shows the toast 'Trip ended — location recording stopped.', the start card comes back and pings stop. Spanish works for the end-trip button, sheet, toast and test card; the ES bolToFinish string was checked in i18n.ts. Remote link: RL-55018 loads from naughty-hugle-13 with a single GET and no Start pressed. A link from an untrusted host (evil.example.com) falls back to the default remote API. TEST-0001 was reset at the end. No deprecated Expo packages.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/driver/{tok}/stops/{id}/tap/arrive", "issue": "Pre-existing: the manual 'I'm at the dock' tap has no distance check. A driver 33 mi away can stamp an arrival, which starts free time; only distance_m is recorded. Consider flagging or refusing taps far outside radius_m."},
+      {"endpoint": "POST /api/driver/{tok}/reset-test", "issue": "Dead code: the anchor_on_first_fix branch (server.py:1050) is left over from the removed anchoring logic."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_geofence_trip.py", "/app/test_reports/pytest/pytest_iter9.xml"],
+  "action_items": [
+    "Stale regression tests: test_driver_app.py, test_driver_emails.py and test_offline_ping.py hardcode old seed tokens (RL-55018 is now 0968f625..., APX-30277 is now 3212b4dd...), so the full suite gives 12 failed / 26 errors. test_test_load.py still asserts the removed anchoring behaviour (6 failures). Update or delete them; test_geofence_trip.py replaces test_test_load.py.",
+    "README.md does not document EXPO_PUBLIC_DRIVER_API_URL / EXPO_PUBLIC_EXTRA_API_HOSTS or the switch to the web app backend, and it still mentions REACT_APP_BACKEND_URL.",
+    "Optional: the 20s load() poll in d/[token].tsx does not run the tripComplete check. If the BOL is attached from the dispatcher web app, tracking only stops on the next ping. Also call stopTracking('delivered') there."
+  ],
+  "critical_code_review_comments": [
+    "tracking.ts: tripComplete correctly requires every stop departed plus a BOL on the final stop when requires_signed_bol is set; it is checked on ping, tap and BOL upload.",
+    "d/[token].tsx is 514 lines; the load useCallback depends on d, so the 20s interval is re-created on every payload change (harmless but noisy).",
+    "If the final stop's geofence never gets exited by radius+150 m (yard or home delivery), tracking runs until the BOL is attached plus a departure, or until the driver uses End trip. The fail-safe covers this."
+  ],
+  "updated_files": ["/app/backend/tests/test_geofence_trip.py"],
+  "success_rate": {"backend": "100% (11/11 new tests; old suite has stale-token failures, see action_items)", "frontend": "100%"},
+  "seed_data_creation": "None. TEST-0001 was reset after testing.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "pytest.ini forces -n 2 --dist loadscope; use -n 0 to run serially. The local DB was reseeded, so local RL-55018 now has the same token as remote (0968f625...). TEST-0001 token 15fea12a... has fixed stops (pickup 41.525,-88.0817; delivery 34.049,-117.435; r300). Web BOL upload works through page.expect_file_chooser.",
+  "rca_of_issue": ""
+}

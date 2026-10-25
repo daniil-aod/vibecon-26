@@ -3,6 +3,7 @@ import { ActivityIndicator, AppState, Linking, Modal, Platform, Pressable, Refre
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
+import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import Lucide from "@react-native-vector-icons/lucide";
@@ -11,7 +12,7 @@ import { PressButton } from "@/src/components/PressButton";
 import { FacilityMap } from "@/src/components/FacilityMap";
 import { useToast } from "@/src/components/Toast";
 import { ApiError, driverApi, DriverPayload, errMsg, Fix, recallApi, rememberApi, resolveApi, Stop } from "@/src/lib/api";
-import { getTrip, on, queuedCount, flushQueue, resumeTracking, startTracking, stopTracking, TrackingMode } from "@/src/lib/tracking";
+import { clearRide, getRide, getTrip, on, queuedCount, flushQueue, resumeTracking, Ride, startTracking, stopTracking, TrackingMode, tripComplete } from "@/src/lib/tracking";
 import { useI18n } from "@/src/lib/i18n";
 import { LangToggle } from "@/src/components/LangToggle";
 import { TripSummary } from "@/src/components/TripSummary";
@@ -50,6 +51,9 @@ export default function DriverScreen() {
   const [busy, setBusy] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [queued, setQueued] = useState(0);
+  const [endSheet, setEndSheet] = useState(false);
+  const [ride, setRide] = useState<Ride | null>(null);
+  const zoneRef = useRef<Record<string, { a: boolean; d: boolean }> | null>(null);
   const toastRef = useRef(toast);
   toastRef.current = toast;
 
@@ -64,7 +68,8 @@ export default function DriverScreen() {
 
   const load = useCallback(async () => {
     if (!api) return;
-    try { setD(await driverApi.get(api, token)); setErr(null); } catch (e) {
+    try { setD(await driverApi.get(api, token)); setErr(null);
+    } catch (e) {
       if (e instanceof ApiError && e.status === 404) { setErr("invalid"); const t = await getTrip(); if (t?.token === token) await stopTracking("invalid"); }
       else if (!d) setErr(errMsg(e));
     }
@@ -76,6 +81,7 @@ export default function DriverScreen() {
   // Re-attach tracking if this load was already started (app reopened / relaunched).
   useEffect(() => {
     (async () => {
+      setRide(await getRide(token));
       const t = await getTrip();
       if (t?.token !== token) return;
       const fg = await Location.getForegroundPermissionsAsync().catch(() => null);
@@ -85,6 +91,28 @@ export default function DriverScreen() {
     })();
   }, [token]);
 
+  // Subtle feedback when the geofence stamps a zone entry/exit (from any update: ping, refresh).
+  useEffect(() => {
+    if (!d) return;
+    const snap: Record<string, { a: boolean; d: boolean }> = {};
+    d.stops.forEach((s) => { snap[s.id] = { a: !!s.arrived_at, d: !!s.departed_at }; });
+    const prev = zoneRef.current;
+    zoneRef.current = snap;
+    if (!prev) return;
+    for (const s of d.stops) {
+      const p = prev[s.id];
+      if (!p) continue;
+      if (!p.d && s.departed_at) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        const m = s.arrived_at ? (new Date(s.departed_at).getTime() - new Date(s.arrived_at).getTime()) / 60000 : 0;
+        toastRef.current.info(LRef.current.zoneLeft(s.facility_name, hrs(m)));
+      } else if (!p.a && s.arrived_at) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        toastRef.current.success(LRef.current.zoneEntered(s.facility_name));
+      }
+    }
+  }, [d]);
+
   useEffect(() => {
     queuedCount().then(setQueued);
     flushQueue();
@@ -92,15 +120,8 @@ export default function DriverScreen() {
     const retry = setInterval(() => { flushQueue(); }, 15000);
     const a = on("fix", (f) => setPos(f));
     const q = on("queue", (n) => setQueued(n));
-    const b = on("payload", (p) => {
-      setD(p);
-      if (p.event === "arrived") toastRef.current.success(LRef.current.toastArrivedGeo);
-      if (p.event === "departed") toastRef.current.success(LRef.current.toastDepartedGeo);
-    });
-    const c = on("stopped", ({ reason }) => {
-      setMode(null);
-      if (reason === "delivered") toastRef.current.success(LRef.current.toastDelivered);
-    });
+    const b = on("payload", (p) => setD(p));
+    const c = on("stopped", () => setMode(null));
     return () => { a(); b(); c(); q(); appSub.remove(); clearInterval(retry); };
   }, []);
 
@@ -109,6 +130,7 @@ export default function DriverScreen() {
     setBgSheet(false);
     const m = await startTracking(token, api);
     setMode(m);
+    setRide(await getRide(token));
     setBgDenied(m === "foreground" && Platform.OS !== "web");
     toast.success(m === "background" ? L.toastStartedBg : L.toastStartedFg);
   };
@@ -133,33 +155,12 @@ export default function DriverScreen() {
     await begin();
   };
 
-  const getFix = async (): Promise<Fix> => {
-    if (pos && pos.accuracy < 1000) return pos;
-    const { issue: iss } = await ensureForeground();
-    if (iss) { setIssue(iss); throw new Error(L.tapNeedsGps); }
-    const l = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
-    const f = { lat: l.coords.latitude, lng: l.coords.longitude, accuracy: l.coords.accuracy ?? 50 };
-    setPos(f);
-    return f;
-  };
-
-  const tap = async (stop: Stop, action: "arrive" | "depart") => {
-    if (!api) return;
-    setBusy(action);
-    try {
-      const fix = await getFix();
-      const data = await driverApi.tap(api, token, stop.id, action, fix);
-      setD(data);
-      toast.success(action === "arrive" ? L.toastArrive : L.toastDepart);
-      if (data.stops.every((s) => s.departed_at) && (await getTrip())?.token === token) await stopTracking("delivered");
-    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); }
-  };
-
   const upload = async (stop: Stop, asset: ImagePicker.ImagePickerAsset) => {
     if (!api) return;
     setBusy("bol");
     try {
-      setD(await driverApi.bol(api, token, stop.id, asset.uri, asset.mimeType || "image/jpeg"));
+      const data = await driverApi.bol(api, token, stop.id, asset.uri, asset.mimeType || "image/jpeg");
+      setD(data);
       toast.success(L.toastBol);
     } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); }
   };
@@ -180,6 +181,29 @@ export default function DriverScreen() {
   };
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+
+  // Fail-safe: the driver can end recording manually (e.g. BOL can't be photographed).
+  const endTrip = async () => {
+    setEndSheet(false);
+    await flushQueue();
+    await stopTracking("ended");
+    setRide(await getRide(token));
+    toast.info(L.toastEnded);
+  };
+
+  const resetTest = async () => {
+    if (!api) return;
+    setBusy("reset");
+    try {
+      if ((await getTrip())?.token === token) await stopTracking("reset");
+      await clearRide(token);
+      setRide(null);
+      zoneRef.current = null;
+      setD(await driverApi.resetTest(api, token));
+      setPos(null);
+      toast.success(L.resetDone);
+    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(""); }
+  };
 
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}>
@@ -212,11 +236,13 @@ export default function DriverScreen() {
   const freeLeft = onSite && cur?.free_expires_at ? (new Date(cur.free_expires_at).getTime() - now) / 1000 : 0;
   const away = cur && pos && cur.lat != null && cur.lng != null ? Math.max(0, dist(pos, { lat: cur.lat, lng: cur.lng }) - (cur.radius_m || 300)) : null;
   const tracking = !!mode;
+  const rideSecs = ride ? ((ride.endedAt ? new Date(ride.endedAt).getTime() : now) - new Date(ride.startedAt).getTime()) / 1000 : 0;
+  const complete = tripComplete(d);
 
   const gpsTone = issue ? styles.chipWarn : !tracking ? styles.chipIdle : pos ? styles.chipOk : styles.chipIdle;
   const gpsText = issue === "blocked" ? L.gpsBlocked
     : issue === "services" ? L.gpsServices
-    : !tracking ? (cur ? L.gpsIdle : L.gpsFinished)
+    : !tracking ? (ride?.endedAt ? L.gpsFinished : L.gpsIdle)
     : pos ? `${L.gpsOn} · ±${Math.round(pos.accuracy)} m · ${preciseOff ? L.approximate : L.precise} · ${mode === "background" ? L.canLock : L.keepOpen}`
     : L.gpsFinding;
   const stopType = (s: string) => (s === "pickup" ? L.pickup : s === "delivery" ? L.delivery : s);
@@ -278,7 +304,18 @@ export default function DriverScreen() {
           )}
         </View>
 
-        {cur && !tracking && (
+        {d.test_load && (
+          <View style={styles.px} testID="driver-test-load-card">
+            <View style={styles.infoCard}>
+              <Text style={styles.infoT}>{L.testLoadNote}</Text>
+              <Pressable testID="driver-reset-test-button" disabled={!!busy} onPress={resetTest} style={styles.resetBtn}>
+                <Text style={styles.link}>{busy === "reset" ? "…" : L.resetTest}</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {!tracking && !ride?.endedAt && (
           <Animated.View entering={FadeInDown.duration(350)} style={styles.px}>
             <View style={styles.startCard} testID="driver-start-card">
               <Text style={styles.startK}>{L.readyK}</Text>
@@ -290,33 +327,46 @@ export default function DriverScreen() {
           </Animated.View>
         )}
 
+        {ride && (
+          <View style={styles.px}>
+            <View style={styles.timer} testID="driver-ride-timer">
+              <Text style={styles.timerSub}>{ride.endedAt ? L.rideEndedAt(fmtClock(ride.endedAt)) : L.rideSince(fmtClock(ride.startedAt))}</Text>
+              <Text style={styles.timerNum} testID="driver-ride-time">{clock(rideSecs)}</Text>
+              {onSite && cur && !ride.endedAt ? (
+                <Animated.View entering={FadeIn} style={styles.zoneBox} testID="driver-zone-timer">
+                  <Text style={styles.zoneK}>{L.inZoneFor} · {cur.facility_name}</Text>
+                  <Text style={styles.zoneNum} testID="driver-zone-time">{clock(dwell)}</Text>
+                  <Text style={[styles.zoneSub, { color: freeLeft > 0 ? colors.warningGlow : colors.successGlow }]}>{freeLeft > 0 ? `${L.freeLeft} ${clock(freeLeft)}` : L.detentionRunning}</Text>
+                </Animated.View>
+              ) : !ride.endedAt ? (
+                <Text style={styles.zoneIdle} testID="driver-zone-idle">{cur ? L.zoneWaiting : L.allZonesDone}</Text>
+              ) : null}
+            </View>
+            {ride.endedAt && cur && !tracking && (
+              <Pressable testID="driver-restart-ride-button" onPress={start} style={styles.resetBtn}>
+                <Text style={styles.link}>{L.restartRide}</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+
         {cur ? (
           <View style={styles.section}>
             <Text style={styles.kicker}>{onSite ? L.atDock : L.headingTo} · {stopType(cur.type)}</Text>
             <Text style={styles.facility} testID="driver-facility-name">{cur.facility_name}</Text>
             {!!cur.address && <View style={styles.addrRow}><Lucide name="map-pin" size={16} color={colors.slate700} style={{ marginTop: 3 }} /><Text style={styles.addr}>{cur.address}</Text></View>}
-            {onSite ? (
-              <View style={styles.timer} testID="driver-on-site-timer">
-                <Text style={styles.timerSub}>{L.onSiteSince} {fmtClock(cur.arrived_at)}</Text>
-                <Text style={styles.timerNum}>{clock(dwell)}</Text>
-                <Text style={[styles.timerState, { color: freeLeft > 0 ? colors.warningGlow : colors.successGlow }]}>{freeLeft > 0 ? `${L.freeLeft} ${clock(freeLeft)}` : L.detentionRunning}</Text>
-              </View>
-            ) : away !== null && (
+            {!onSite && away !== null && (
               <View style={styles.awayRow} testID="driver-distance"><Lucide name="navigation" size={16} color={colors.slate700} /><Text style={styles.addr}>{away < 50 ? L.atGate : L.miAway((away / 1609).toFixed(1))}</Text></View>
             )}
             <View style={{ marginTop: spacing.lg }}><FacilityMap testID="driver-map" stop={cur} truck={pos} height={200} /></View>
-            <View style={{ marginTop: spacing.xl, gap: spacing.md }}>
-              {!cur.arrived_at && <PressButton testID="driver-arrived-button" label={L.imAtDock} icon="log-in" loading={busy === "arrive"} disabled={!!busy} onPress={() => tap(cur, "arrive")} bg={colors.primary} fg={colors.primaryForeground} />}
-              {onSite && <PressButton testID="driver-departed-button" label={L.imLeaving} icon="log-out" loading={busy === "depart"} disabled={!!busy} onPress={() => tap(cur, "depart")} bg={colors.success} fg={colors.primaryForeground} />}
-              {!cur.arrived_at && <Text style={styles.hint}>{L.autoHint}</Text>}
-            </View>
+            <Text style={styles.hint}>{L.autoHint}</Text>
           </View>
         ) : (
           <View style={styles.section} testID="driver-all-done">
             <View style={{ alignItems: "center" }}>
               <Lucide name="circle-check" size={48} color={colors.successStrong} />
               <Text style={[styles.facility, { marginTop: spacing.md }]}>{L.allDone}</Text>
-              <Text style={styles.muted}>{L.allDoneP}</Text>
+              <Text style={styles.muted} testID="driver-all-done-note">{!tracking ? L.allDoneP : complete ? L.tapEndRide : L.bolToFinish}</Text>
             </View>
             <TripSummary stops={stops} />
           </View>
@@ -336,6 +386,13 @@ export default function DriverScreen() {
               textStyle={{ fontSize: 17 }}
             />
             <Text style={styles.hint}>{L.bolHint(bolStop.facility_name)}</Text>
+          </View>
+        )}
+
+        {tracking && (
+          <View style={styles.section}>
+            <PressButton testID="driver-end-trip-button" label={L.endRide} icon="square" onPress={() => setEndSheet(true)}
+              bg={complete ? colors.primary : colors.surface} fg={complete ? colors.primaryForeground : colors.slate900} border={colors.slate900} />
           </View>
         )}
 
@@ -371,6 +428,19 @@ export default function DriverScreen() {
             <Pressable testID="driver-background-skip-button" onPress={begin} style={styles.skip}><Text style={styles.skipT}>{L.notNow}</Text></Pressable>
           </View>
         </View>
+      </Modal>
+
+      <Modal visible={endSheet} transparent animationType="slide" onRequestClose={() => setEndSheet(false)}>
+        <Pressable style={styles.overlay} onPress={() => setEndSheet(false)}>
+          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]} testID="driver-end-trip-sheet">
+            <View style={styles.grab} />
+            <Lucide name="triangle-alert" size={28} color={colors.warning} />
+            <Text style={styles.sheetH}>{L.endTripH}</Text>
+            <Text style={styles.sheetP}>{L.endTripP}</Text>
+            <PressButton testID="driver-end-trip-confirm-button" size="md" label={L.endTripConfirm} icon="square" onPress={endTrip} bg={colors.warningText} fg={colors.primaryForeground} style={{ marginTop: spacing.lg, alignSelf: "stretch" }} />
+            <PressButton testID="driver-end-trip-cancel-button" size="md" label={L.keepTracking} onPress={() => setEndSheet(false)} bg={colors.surface} fg={colors.slate900} border={colors.slate900} style={{ marginTop: spacing.md, alignSelf: "stretch" }} />
+          </Pressable>
+        </Pressable>
       </Modal>
 
       <Modal visible={!!photoSheet} transparent animationType="slide" onRequestClose={() => setPhotoSheet(null)}>
@@ -417,6 +487,14 @@ const styles = StyleSheet.create({
   infoCard: { backgroundColor: colors.slate100, borderRadius: radius.lg, padding: spacing.md, gap: spacing.xs },
   infoT: { fontFamily: fonts.body, fontSize: 14, lineHeight: 20, color: colors.slate700 },
   link: { fontFamily: fonts.bodySemi, fontSize: 14, color: colors.accent, paddingVertical: spacing.xs },
+  resetBtn: { minHeight: 44, justifyContent: "center", alignSelf: "flex-start" },
+  endBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm, minHeight: 48, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border },
+  endT: { fontFamily: fonts.bodyMedium, fontSize: 15, color: colors.mutedForeground },
+  zoneBox: { marginTop: spacing.lg, borderTopWidth: 1, borderTopColor: colors.slate700, paddingTop: spacing.md },
+  zoneK: { fontFamily: fonts.bodySemi, fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: colors.accentSoft },
+  zoneNum: { fontFamily: fonts.monoSemi, fontSize: 32, color: colors.primaryForeground, marginTop: spacing.xs, fontVariant: ["tabular-nums"] },
+  zoneSub: { fontFamily: fonts.bodyMedium, fontSize: 14, marginTop: spacing.xs },
+  zoneIdle: { fontFamily: fonts.body, fontSize: 14, color: colors.slate400, marginTop: spacing.md },
   b: { fontFamily: fonts.bodySemi },
   hi: { fontFamily: fonts.body, fontSize: 16, color: colors.slate900 },
   mutedInline: { color: colors.mutedForeground },

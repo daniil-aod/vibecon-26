@@ -56,3 +56,22 @@ End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads 
 - Note: the web dashboard changes in /app/web go live only when the web app is republished.
 
 
+## 2026-06 — Round 4
+- TEST-0001 test load in the abdowns4 demo fleet (Evergreen contract), anchored at the first accurate fix; reset endpoint plus an in-app Reset test trip button. Demo driver tokens are stable (DEMO_VERSION 3).
+- App Store readiness: bundle id/package com.dockclock.driver, 1024 icon, adaptive icon, splash, ITSAppUsesNonExemptEncryption false, removed unused "fetch" background mode; .env no longer git-ignored (deployment blocker).
+- Tested: iteration_8 (backend 10/10, frontend pass); accuracy gate and card order fixed afterwards.
+- Backlog: localize server-provided test-load strings; delete BOL files on test reset.
+
+## 2026-06 — Round 5
+- Driver app now talks to the web app's backend (EXPO_PUBLIC_DRIVER_API_URL = naughty-hugle-13).
+- Start from anywhere; full route tracked; server geofence stamps arrival (free time starts) and departure. Tracking auto-stops only when all stops are departed and the final BOL is attached (if required); End trip fail-safe. Test-load anchor logic removed (DEMO_VERSION 4).
+- Tested: iteration_9 all pass.
+- Port to the web app project (naughty-hugle-13) so it matches: /api/open landing page + web /d redirect, honoring ping ts for offline points, driver email + schedules, reset-test.
+
+## 2026-06 — Round 6
+- Ride flow per the owner's spec: Start ride → main trip timer (persisted per load, survives reopen). Auto zone entry from the server geofence shows an "In zone for" timer until auto exit. No manual arrive/leave buttons. End ride (confirm) ends the timer and tracking; Restart link if ended by mistake. Haptic + toast on zone enter/exit.
+- Tested: iteration_10 all pass; wording fixes and restart link added after.
+
+
+
+

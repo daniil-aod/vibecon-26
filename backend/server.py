@@ -1030,10 +1030,29 @@ def driver_payload(load, fleet):
             "driver_name": (load.get("driver") or {}).get("name"),
             "free_time_hours": (load.get("detention") or {}).get("free_time_hours"),
             "requires_signed_bol": (load.get("detention") or {}).get("requires_signed_bol"),
+            "test_load": bool(load.get("is_test_load")),
             "stops": [{k: s.get(k) for k in ("id", "seq", "type", "facility_name", "address", "appointment", "lat", "lng",
                                             "radius_m", "arrived_at", "departed_at", "arrived_source", "departed_source")}
                       | {"bol_count": len(s.get("bol", [])), "free_expires_at": s["billing"].get("free_expires_at"),
                          "notice_sent_at": s["notice"].get("sent_at")} for s in stops]}
+
+
+@api.post("/driver/{tok}/reset-test")
+async def driver_reset_test(tok: str):
+    """Only for the owner's test load: put it back to 'not started' so the trip can be tried again."""
+    load = await load_by_driver_token(tok)
+    if not load.get("is_test_load"):
+        raise HTTPException(status_code=403, detail="Only test loads can be reset")
+    for s in load["stops"]:
+        s.update({"arrived_at": None, "departed_at": None, "arrived_source": None, "departed_source": None,
+                  "arrived_coords": None, "departed_coords": None, "events": [], "bol": [],
+                  "notice": {"status": "pending", "due_at": None, "sent_at": None}})
+    await db.loads.update_one({"id": load["id"]}, {"$set": {"stops": load["stops"], "last_ping": None, "updated_at": iso(now_utc())}})
+    await db.pings.delete_many({"load_id": load["id"]})
+    await db.invoices.delete_many({"load_id": load["id"]})
+    await db.notices.delete_many({"load_id": load["id"]})
+    fleet = await db.fleets.find_one({"id": load["fleet_id"]}, {"_id": 0})
+    return driver_payload(await load_by_driver_token(tok), fleet)
 
 
 @api.get("/open/{tok}", response_class=HTMLResponse)

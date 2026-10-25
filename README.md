@@ -5,7 +5,7 @@
 > tested, how everything is wired, the demo fleet, known gotchas, and what to do next.
 > Companion docs: `backend/DEMO.md` (demo fleet), `memory/PRD.md` (roadmap), `design_guidelines.md` (UI).
 
-Preview URL: **https://naughty-hugle-13.preview.emergentagent.com**
+Preview URL: **https://load-locator-4.preview.emergentagent.com**
 
 ---
 
@@ -288,7 +288,10 @@ curl -X POST "$BACKEND_URL/api/demo/reseed" -H "Authorization: Bearer $WEBHOOK_C
 ```
 Note: a rebuild regenerates `public_token`s, so `/e/...` and `/d/...` links change. List current links:
 `python -c "..."` querying loads.driver_token and invoices.public_token for the demo fleet.
-Current `DEMO_VERSION = 2`.
+Current `DEMO_VERSION = 3`. Demo driver tokens are now deterministic (sha256 of fleet id + load number), so driver
+links survive reseeds. **TEST-0001** is the owner's own test load: stop 1 "Your test dock" is anchored at the first
+accurate (≤100 m) GPS fix after Start trip, with radius 150 m, so departure fires about 300 m away. `POST
+/api/driver/{tok}/reset-test` (test loads only) resets it.
 
 ---
 
@@ -308,8 +311,13 @@ is the Expo driver app. `web/src/pages/Driver.js` now just forwards old `/d/:tok
 - **Precise location:** on iOS, if the driver picked Approximate, the app shows Apple's temporary precise prompt
   (`expo-location/next`, `locationFullAccuracyPermission`). On Android it re-asks for fine location. If the driver
   still says no, a card links to Settings.
-- **Which backend:** the `api` origin from the link is accepted only if it's the app's own `EXPO_PUBLIC_BACKEND_URL`
-  host or is listed in `EXPO_PUBLIC_EXTRA_API_HOSTS`. Add the production web app's domain there.
+- **Which backend:** the app talks to `EXPO_PUBLIC_DRIVER_API_URL` (the web app's backend, currently
+  `https://naughty-hugle-13.preview.emergentagent.com`). An `api` origin carried in a link is accepted only if it's
+  that host, this project's own `EXPO_PUBLIC_BACKEND_URL` host, or listed in `EXPO_PUBLIC_EXTRA_API_HOSTS`.
+- **Trip lifecycle:** Start can be pressed anywhere. Every fix is sent as a ping (the full route). The server
+  geofence stamps arrival when the driver enters a stop's zone (free time starts then), and departure when they
+  leave it (radius + 150 m buffer against GPS drift). Tracking stops automatically only when every stop is departed
+  AND, if the contract requires a signed BOL, the final stop has a BOL photo. **End trip** is the manual fail-safe.
 - Manual "I'm at the dock / I'm leaving" taps and the BOL photo (camera or gallery, `expo-image-picker`) remain.
   The map is OSM/Leaflet in a WebView.
 

@@ -6,17 +6,27 @@
     "orientation": "portrait",
     "scheme": "dockclock",
     "userInterfaceStyle": "light",
+    "icon": "./assets/images/icon.png",
     "ios": {
       "supportsTablet": false,
+      "bundleIdentifier": "com.dockclock.driver",
+      "buildNumber": "1",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Auto-stamp your dock arrival and departure times",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Keep stamping dock times while your phone is locked",
         "NSCameraUsageDescription": "Photograph the signed BOL for your load",
         "NSPhotoLibraryUsageDescription": "Attach a BOL photo from your gallery",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": ["location"],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "package": "com.dockclock.driver",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#020617"
+      },
       "edgeToEdgeEnabled": true,
       "permissions": [
         "ACCESS_FINE_LOCATION",
@@ -29,10 +39,20 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "single"
+      "output": "single",
+      "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#020617"
+        }
+      ],
       "expo-font",
       [
         "expo-location",

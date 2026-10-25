@@ -1,7 +1,8 @@
 import storage from "@/src/utils/storage";
 import { uploadForm } from "@/src/utils/upload";
 
-const DEFAULT_API = (process.env.EXPO_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
+// Backend the driver app talks to (the web app's backend). Falls back to this project's own backend.
+const DEFAULT_API = (process.env.EXPO_PUBLIC_DRIVER_API_URL || process.env.EXPO_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
 const EXTRA_HOSTS = (process.env.EXPO_PUBLIC_EXTRA_API_HOSTS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 export type Stop = {
@@ -12,7 +13,7 @@ export type Stop = {
 };
 export type DriverPayload = {
   load_number: string; fleet_name: string; driver_name?: string | null;
-  free_time_hours?: number; requires_signed_bol?: boolean; stops: Stop[]; event?: string | null;
+  free_time_hours?: number; requires_signed_bol?: boolean; test_load?: boolean; stops: Stop[]; event?: string | null;
 };
 export type Fix = { lat: number; lng: number; accuracy: number; ts?: string };
 
@@ -23,7 +24,8 @@ export function resolveApi(raw?: string | null): string {
   if (!m) return DEFAULT_API;
   const host = m[1].toLowerCase();
   const defaultHost = DEFAULT_API.replace(/^https?:\/\//, "").split("/")[0].toLowerCase();
-  const ok = host === defaultHost || EXTRA_HOSTS.includes(host);
+  const ownHost = (process.env.EXPO_PUBLIC_BACKEND_URL || "").replace(/^https?:\/\//, "").split("/")[0].toLowerCase();
+  const ok = host === defaultHost || host === ownHost || EXTRA_HOSTS.includes(host);
   return ok ? `https://${host}${m[2] || ""}` : DEFAULT_API;
 }
 
@@ -61,6 +63,7 @@ const json = (body: unknown): RequestInit => ({ method: "POST", headers: { "Cont
 
 export const driverApi = {
   get: (api: string, tok: string) => request<DriverPayload>(api, `/driver/${tok}`),
+  resetTest: (api: string, tok: string) => request<DriverPayload>(api, `/driver/${tok}/reset-test`, { method: "POST" }),
   ping: (api: string, tok: string, fix: Fix) => request<DriverPayload>(api, `/driver/${tok}/ping`, json(fix)),
   tap: (api: string, tok: string, stopId: string, action: "arrive" | "depart", fix: Fix) =>
     request<DriverPayload>(api, `/driver/${tok}/stops/${stopId}/tap/${action}`, json(fix)),

@@ -1,0 +1,39 @@
+{
+  "summary": "Tested the TEST-0001 test load from end to end. Backend: 10/10 new pytest cases pass. They cover the fresh payload (test_load true, stop 0 lat/lng null, no arrivals, 2h free, BOL required), anchoring on the first ping plus a geofence arrival, a 50 m move staying on site, a ~610 m move stamping departure with delivery becoming the current stop and no re-anchor, reset-test restoring a fresh state (pings, invoices and notices count 0 in the DB), the 403 on RL-55018 with that load unchanged, and the 404 on an invalid token. Frontend web at 390x844 with geolocation mocked: the start card and test card render; Start trip stamps arrival right away (geofence toast plus on-site timer); a 50 m move stays on site; a 600 m move stamps departure about 1 s after the change because of the 25 m distance throttle, and the toast reads 'Departure stamped'; Reset brings back the start card with a toast, and nothing re-anchors over the next 22 s. Spanish strings for the test card, reset button and toasts are correct. app.json has the bundle id and package com.dockclock.driver, icons at 1024x1024, the splash plugin and ITSAppUsesNonExemptEncryption false. TEST-0001 was left reset.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/driver/{tok}/ping", "issue": "The test dock is anchored on the first ping whatever its accuracy. If the first fix is coarse (for example accuracy 800 m from Wi-Fi or cell indoors), the stop is anchored at the wrong point and no arrival is stamped (needs acc <= 500). A later accurate fix 2.2 km from the bad anchor does not re-anchor and does not stamp arrival either. Reproduced: ping(41.90, acc 800) gave lat 41.9 and no arrival; ping(41.88, acc 10) still gave no arrival. Suggested fix: anchor only when accuracy <= ~100 m, or re-anchor on each better fix until arrival is stamped."},
+      {"endpoint": "POST /api/driver/{tok}/reset-test", "issue": "Reset clears stop.bol entries but does not delete the BOL files stored for the load (store_file records), so orphaned files pile up after repeated test runs. Low impact."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/d/[token] test load (start state)", "issues": [
+        "The driver-test-load-card, which explains how the test works, sits below the fold (y≈1014 at 390x844). The user sees Start trip before the explanation. Consider moving the test note into or above the start card.",
+        "The driver-reset-test-button text link is 26 px tall (hitSlop 8 brings it to about 42 px), just under 44 px.",
+        "In Spanish mode, text coming from the server stays English: the facility name 'Your test dock', the address 'Set to your location when you press Start trip' and 'Your location when you pressed Start (...)', and the driver name 'You (test driver)'."
+      ]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_test_load.py", "/app/test_reports/pytest/pytest_iter8.xml"],
+  "action_items": [
+    "(Minor) driver_ping anchor: only anchor when accuracy <= ~100 m, or keep re-anchoring until arrival, so a coarse first fix does not strand the test dock.",
+    "(Optional UX) Move the test-load note higher on the screen and localize the server-provided test dock strings (or localize them on the client when test_load is true).",
+    "(Optional) Delete the BOL file records for the load in reset-test."
+  ],
+  "critical_code_review_comments": [
+    "Tapping 'I'm at the dock' before any ping records the arrival with lat still null. The next ping then anchors and geofence departure works (verified), so this is OK.",
+    "stopTracking clears the offline queue on reset, so queued pings cannot re-anchor after a reset (verified: no re-anchor 22 s after reset).",
+    "No deprecated Expo packages (expo-av, expo-barcode-scanner, expo-background-fetch) in package.json."
+  ],
+  "updated_files": ["/app/backend/tests/test_test_load.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "None. The demo was not reseeded. TEST-0001 was reset at the end (stop 0 lat null, no arrivals).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "TEST token 15fea12acebc17d44921caaad2101f5bd5b231f6, RL-55018 token 0968f6252c5e45f8ec02dbb9a24b1f175f3d311b. Run with EXPO_PUBLIC_BACKEND_URL exported. The test file resets TEST-0001 before and after it runs. On web, Playwright set_geolocation triggers watchPosition, and a move of more than 25 m sends a ping straight away."
+}
