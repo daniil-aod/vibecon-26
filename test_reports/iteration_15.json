@@ -1,0 +1,32 @@
+{
+  "summary": "Tested the Expo Go fallback fixes on the backend (pytest) and the frontend (Playwright plus code review). All 63 backend tests pass, including 8 new tests (test_open_page_expo_go.py) run against both the load-locator-4 host and the e38e91c9 alias. GET /api/open/<TEST-0001 tok> returns 200 with open-app-button, open-expo-go-box and open-expo-go-button. The Expo Go href is exps://load-locator-4.preview.emergentagent.com/--/d/<tok>?api=<request origin>. The intent link is intent://d/<tok>?api=..#Intent;scheme=dockclock;S.browser_fallback_url=<origin>/api/open/<tok>?noapp=1;end, and the 300ms auto-redirect setTimeout is present. With ?noapp=1 there is no setTimeout and both buttons are still shown. An invalid token returns 404 with open-invalid and no Expo Go box and no script. In Playwright, an Android UA gets open-btn href intent:// with browser_fallback_url decoding to ?noapp=1, and an iOS UA gets dockclock://. The Expo web regression on /d/<tok> at 390x844 with mocked GPS passed: no page errors from the expo-constants import, Start ride starts the ride (driver-ride-time counting, driver-zone-idle shown) and driver-expo-go-note does not appear on web. The test loads were reset on both backends afterwards. The isExpoGo logic is correct on review (Constants.executionEnvironment === ExecutionEnvironment.StoreClient). It skips the background-permission sheet and calls begin(), which sets bgDenied for foreground mode, so driver-expo-go-note replaces the Open Settings link. Native Expo Go behavior was not automated. No deprecated packages were detected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/open/{tok}", "issue": "expo_go_link and deep links use the request origin as api=. If the page is opened via a host that is not in the app's allowlist (for example the e38e91c9 alias), resolveApi() in src/lib/api.ts rejects it and silently falls back to DEFAULT_API (naughty-hugle-13, a different backend). It works today only because TEST-0001 exists on both. Emailed links use fleet.app_url (load-locator-4), which is allowed, so the real emails are fine."},
+      {"endpoint": "GET /api/open/{tok}", "issue": "The copy mismatches the app: the page says 'press Start trip' but the app button is 'Start ride'. Step 3 says 'Come back to this text' although links are now emailed. Reference: /app/backend/templates.py:182,189"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_open_page_expo_go.py", "/app/test_reports/pytest/pytest_iter11.xml"],
+  "action_items": [
+    "Optional: add the e38e91c9-2f90-4132-abe8-9e55b84b1985.preview.emergentagent.com host to EXPO_PUBLIC_EXTRA_API_HOSTS, or build the /api/open links from fleet.app_url instead of the request host, so the api= param is always accepted by resolveApi.",
+    "Optional: change 'Start trip' to 'Start ride' and 'this text' to 'this message/email' in driver_open_page (templates.py)."
+  ],
+  "critical_code_review_comments": [
+    "The isExpoGo check (app/d/[token].tsx:26) is correct. start() skips setBgSheet for Expo Go, begin() sets bgDenied=(mode==='foreground' && !web), and the banner shows driver-expo-go-note instead of driver-background-settings-link. startTracking falls back to foreground if startBackground throws in Expo Go.",
+    "Hardcoded demo driver tokens in the older tests were stale after a reseed, so 26 tests errored with 'Demo load missing'. The tests now look tokens up by load_number."
+  ],
+  "updated_files": ["/app/backend/tests/test_open_page_expo_go.py (new)", "/app/backend/tests/test_driver_app.py", "/app/backend/tests/test_offline_ping.py", "/app/backend/tests/test_driver_emails.py"],
+  "success_rate": {"backend": "100% (63/63)", "frontend": "100%"},
+  "seed_data_creation": "None. The TEST-0001 ride was started on web (it went to DEFAULT_API naughty-hugle-13) and then reset via POST /api/driver/<tok>/reset-test on both naughty-hugle-13 and load-locator-4.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Without an api= param, the web /d/<tok> page uses EXPO_PUBLIC_DRIVER_API_URL (naughty-hugle-13), so web rides hit the remote backend; reset there after testing. Demo tokens change on reseed, so look them up by load_number. TEST-0001 token is 15fea12acebc17d44921caaad2101f5bd5b231f6.",
+  "rca_of_issue": ""
+}

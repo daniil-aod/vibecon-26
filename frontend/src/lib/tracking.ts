@@ -82,13 +82,38 @@ export async function flushQueue() {
   } finally { inFlight = false; }
 }
 
+// ---- Zone crossing detection (same rules as the backend's zone_state in server.py) so a boundary
+// crossing is always sent right away, never skipped by the 20 s / 25 m throttle.
+const ACC_SLACK_M = 25, EXIT_BUFFER_M = 10, MAX_FIX_ACC_M = 100;
+type ZoneState = "inside" | "outside" | null;
+export function zoneState(distM: number, acc: number, radius: number): ZoneState {
+  if (acc > MAX_FIX_ACC_M) return null;
+  const d = distM - Math.min(acc, ACC_SLACK_M);
+  if (d <= radius) return "inside";
+  if (d > radius + EXIT_BUFFER_M) return "outside";
+  return null;
+}
+let zone: { stopId: string; lat: number; lng: number; radius: number; state: ZoneState } | null = null;
+/** Remember the stop whose zone we're watching (current stop from the latest payload). */
+export function watchZone(p: DriverPayload) {
+  const cur = [...p.stops].sort((a, b) => a.seq - b.seq).find((s) => !s.departed_at);
+  if (!cur || cur.lat == null || cur.lng == null) { zone = null; return; }
+  const state: ZoneState = cur.arrived_at ? "inside" : "outside";
+  if (!zone || zone.stopId !== cur.id) zone = { stopId: cur.id, lat: cur.lat, lng: cur.lng, radius: cur.radius_m || 45, state };
+  else zone.state = state;
+}
+on("payload", watchZone);
+
 async function handleFix(loc: Location.LocationObject) {
   const fix: Fix = { lat: loc.coords.latitude, lng: loc.coords.longitude, accuracy: loc.coords.accuracy ?? 50, ts: new Date(loc.timestamp || Date.now()).toISOString() };
   emit("fix", fix);
   const t = await getTrip();
   if (!t) return;
   const moved = last.lat == null ? Infinity : dist({ lat: last.lat, lng: last.lng as number }, fix);
-  if (Date.now() - last.t < PING_EVERY_MS && moved < PING_MOVE_M) return;
+  const zs = zone ? zoneState(dist(fix, zone), fix.accuracy, zone.radius) : null;
+  const crossing = !!(zone && zs && zs !== zone.state);
+  if (crossing && zone) zone.state = zs;
+  if (!crossing && Date.now() - last.t < PING_EVERY_MS && moved < PING_MOVE_M) return;
   const q = await loadQueue();
   if (q.length && q[q.length - 1].ts === fix.ts) return; // same GPS point re-delivered (e.g. after resume)
   last = { t: Date.now(), lat: fix.lat, lng: fix.lng };
@@ -108,7 +133,7 @@ if (Platform.OS !== "web") {
   try {
     TaskManager.defineTask<{ locations: Location.LocationObject[] }>(LOCATION_TASK, async ({ data, error }) => {
       if (error || !data?.locations?.length) return;
-      await handleFix(data.locations[data.locations.length - 1]);
+      for (const l of data.locations) await handleFix(l); // every point, so no boundary crossing is missed
     });
   } catch {
     // Task manager unavailable (e.g. some Expo Go builds) — foreground mode is used instead.

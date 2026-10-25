@@ -24,7 +24,7 @@ export const emptyLoad = () => ({
   billing_terms: { ...EMPTY_BILLING }, refs: { bol_number: "", pro_number: "", po_number: "", shipment_date: "" },
   term_sources: {}, term_refs: {}, billing_mode: "review", confirm_billing: false,
   stops: [{ type: "pickup", facility_name: "", address: "", appointment: "" }, { type: "delivery", facility_name: "", address: "", appointment: "" }],
-  driver: { name: "", phone: "", email: "" }, low_confidence: [],
+  driver: { name: "", phone: "", email: "" }, low_confidence: [], geofence_radius_m: 45,
 });
 
 export const fromExtracted = (x) => {
@@ -207,6 +207,7 @@ export default function LoadForm({ value: v, onChange, showDriver = true }) {
             <F label="Driver name" path="driver.name" lc={[]}><Input data-testid="form-driver-name-input" value={v.driver.name || ""} onChange={(e) => set({ driver: { ...v.driver, name: e.target.value } })} /></F>
             <F label="Driver mobile" path="driver.phone" lc={[]} hint="US numbers can be 10 digits"><Input data-testid="form-driver-phone-input" type="tel" value={v.driver.phone || ""} onChange={(e) => set({ driver: { ...v.driver, phone: e.target.value } })} /></F>
             <F label="Driver email" path="driver.email" lc={[]} hint="The app link and dock-time recaps are emailed here"><Input data-testid="form-driver-email-input" type="email" value={v.driver.email || ""} onChange={(e) => set({ driver: { ...v.driver, email: e.target.value } })} /></F>
+            <F label="Geofence radius (m)" path="geofence_radius_m" lc={[]} hint="Zone size around each stop for auto arrive/leave (default 45 m)"><Input data-testid="form-geofence-radius-input" type="number" min="15" max="3000" step="5" value={v.geofence_radius_m ?? ""} onChange={(e) => set({ geofence_radius_m: num(e.target.value) })} /></F>
           </div>
         </section>
       )}

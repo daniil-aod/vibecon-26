@@ -79,7 +79,7 @@ export default function Evidence() {
                 {[["Arrived (in)", s.arrived_at, s.arrived_source, s.arrived_coords], ["Departed (out)", s.departed_at, s.departed_source, s.departed_coords]].map(([k, at, src, c]) => (
                   <div key={k} className="grid grid-cols-[120px_1fr] gap-2"><dt className="text-slate-500">{k}</dt>
                     <dd><div className="font-mono font-medium">{fmtTime(at, tz, { seconds: true, zone: true })}</div><div className="text-xs text-slate-500">{SRC[src] || src}{c?.lat ? ` · ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)} ±${Math.round(c.accuracy || 0)} m` : ""}</div></dd></div>))}
-                <div className="grid grid-cols-[120px_1fr] gap-2"><dt className="text-slate-500">Location</dt><dd className="flex items-start gap-1"><MapPin className="mt-0.5 h-3.5 w-3.5" />{s.address} · geofence {Math.round(s.radius_m || 300)} m</dd></div>
+                <div className="grid grid-cols-[120px_1fr] gap-2"><dt className="text-slate-500">Location</dt><dd className="flex items-start gap-1"><MapPin className="mt-0.5 h-3.5 w-3.5" />{s.address} · geofence {Math.round(s.radius_m || 45)} m</dd></div>
               </dl>
               <div className="mt-5 rounded-lg bg-slate-50 p-4 font-mono text-sm">
                 <div className="flex justify-between"><span>Time on site</span><span>{hrs(b.dwell_minutes)}</span></div>

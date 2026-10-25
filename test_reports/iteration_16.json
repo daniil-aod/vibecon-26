@@ -1,0 +1,49 @@
+{
+  "summary": "Tested the 45 m geofence, the zone_state crossing rules, ride start/end and reset on the LOCAL backend (pytest, 15 new tests, all passing), plus the mobile web preview at 390x844 with mocked geolocation. Start ride sets ride.started_at on the backend. Entering the 45 m pickup zone shows the zone timer in about 0.2 s with the 'Entered zone' toast, so the crossing skips the 20 s throttle. Moving about 100 m out removes the zone timer in about 0.1 s with the 'Left zone' toast, and the backend records departed_source=geofence. Entering the next stop's (delivery) zone also works. End ride inside the zone freezes the ride timer and removes the zone timer, and the backend sets ride.ended_at and records departed_source=ride_end; this survives a page reload. The web files (LoadForm, LoadDetail, Maps, TrailPlayback) compile with esbuild and the code review is done. Main problem: a link opened from the e38e91c9 host carries api=https://e38e91c9-..., and resolveApi() rejects that host because it is not in EXPO_PUBLIC_EXTRA_API_HOSTS. The app then silently uses the REMOTE naughty-hugle-13 backend (300 m zones, no ride routes), so the 'LOCAL backend link' from the review request actually tests the remote backend. My first UI run hit the remote this way: it recorded an arrival on remote TEST-0001, which I then undid with reset-test. Local and remote TEST-0001 are both reset now.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/driver/{tok}/ping", "issue": "acc = body.accuracy or 50 turns accuracy 0 into 50, while tracking.ts uses ?? 50 and keeps 0. For an accuracy-0 fix between 55 and 80 m out, the backend says 'undecided' and the app says 'outside'. The app then treats every such fix as a crossing and sends a ping each time, skipping the throttle. Use 'if body.accuracy is None' in the backend. server.py:1193"},
+      {"endpoint": "POST /api/driver/{tok}/ping", "issue": "Pings are still processed after ride.ended_at is set, so a late or queued ping can arrive at the next stop after the driver ended the ride. Consider ignoring zone events when ride.ended_at is set. server.py:1189-1207"},
+      {"endpoint": "POST /api/loads", "issue": "_apply_radius validates only after build_stops/upsert_facility have already written facilities, so a request rejected with 400 still leaves facility side effects. Validate the radius before build_stops. server.py:487-488"},
+      {"endpoint": "pdfgen", "issue": "Evidence PDF still falls back to 300 m when radius_m is missing. pdfgen.py:47"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Leftover 300 m fallbacks", "issue": "FacilityMap.tsx:11 (r = stop.radius_m || 300) and app/d/[token].tsx:246 (distance 'away' subtracts radius_m || 300) should use 45. Same in web Evidence.js:82.", "testID": "driver-distance", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Texted link from the local host -> mobile app", "issue": "/api/open on e38e91c9-2f90-4132-abe8-9e55b84b1985.preview.emergentagent.com builds deep links with api=https://e38e91c9-.... resolveApi() (src/lib/api.ts:22-31) accepts only DEFAULT_API (naughty-hugle-13), EXPO_PUBLIC_BACKEND_URL (load-locator-4) and EXPO_PUBLIC_EXTRA_API_HOSTS, so e38e91c9 falls back to the REMOTE backend. Reproduced: the app sent ride/start (404 on remote) and pings to naughty-hugle-13. Both hosts serve this same backend (checked by starting a ride on one host and reading it from the other).", "affected_testIDs": ["driver-start-button", "driver-zone-timer", "driver-end-trip-confirm-button"]},
+      {"flow": "Web Edit terms -> PUT /loads", "issue": "LoadDetail sends the stored load.geofence_radius_m (e.g. 45) back with every 'Edit terms' save. _apply_radius then puts all not-yet-arrived stops back to that value, silently undoing any per-facility radius set through the Geofence slider (PATCH /facilities). Fix: send geofence_radius_m only if the user changed it, or keep the facility radius when it differs.", "affected_testIDs": ["load-edit-save-button", "geofence-radius-slider", "form-geofence-radius-input"]}
+    ],
+    "design_issues": [
+      {"screen": "Web LoadDetail geofence dialog", "issues": ["The slider max is 1500 m, while the backend and the LoadForm input allow up to 3000 m (inconsistent limits)."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_ride_geofence45.py", "/app/backend/tests/test_geofence_trip.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "HIGH: Add e38e91c9-2f90-4132-abe8-9e55b84b1985.preview.emergentagent.com to EXPO_PUBLIC_EXTRA_API_HOSTS in frontend/.env and restart expo. Better: also trust the preview hosts of this project, so links from the local backend don't silently go to the remote backend.",
+    "MEDIUM: LoadDetail 'Edit terms' save overwrites per-facility geofence radii with load.geofence_radius_m. Send it only when changed.",
+    "LOW: In driver_ping use 'accuracy if accuracy is not None else 50' to match tracking.ts.",
+    "LOW: Ignore geofence events in driver_ping once ride.ended_at is set.",
+    "LOW: Replace the leftover 300 m fallbacks with 45 (FacilityMap.tsx:11, [token].tsx:246, pdfgen.py:47, web Evidence.js:82).",
+    "LOW: In create_load, validate geofence_radius_m before build_stops (avoids facility writes on a 400).",
+    "LOW: Make the LoadDetail slider max (1500) match the backend and form max (3000), or document the difference."
+  ],
+  "critical_code_review_comments": [
+    "zone_state (server.py:60) and zoneState (tracking.ts:87) have the same constants and logic: parity is correct.",
+    "watchZone runs on the initial GET and on every ping payload. It does not run on the rideStart/rideEnd/reset payloads; harmless today because tracking stops on end.",
+    "endTrip: flushQueue() returns at once if a send is in flight, and stopTracking() then clears the queue, so offline-queued points can be lost on End ride (minor).",
+    "The backend test suite shares TEST-0001 across files; run it with -n 0 (xdist in parallel causes interference, seen in the first run).",
+    "server.py is 1870 lines; split it into routers (driver, loads, billing)."
+  ],
+  "updated_files": ["/app/backend/tests/test_ride_geofence45.py (new)", "/app/backend/tests/test_geofence_trip.py (expected radius 300 -> 45)"],
+  "success_rate": {"backend": "100% of new tests (15/15); full suite 77/78 run serially. The 1 failure is test_driver_emails::test_run_schedules, caused by a 429 rate limit from the third-party email provider and unrelated to this change.", "frontend": "100% of the geofence enter/exit, next-stop and End ride flows when using an api host the app trusts; FAILS with the e38e91c9 link because the app falls back to the remote backend"},
+  "seed_data_creation": "None. TEST-0001 reset on local; remote TEST-0001 reset after the accidental mutation (back to no arrivals, no ride).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use api=https://load-locator-4.preview.emergentagent.com (trusted) for the mobile web test, or confirm e38e91c9 has been added to EXTRA_API_HOSTS. Grant geolocation and use context.set_geolocation to move: pickup 41.525,-88.0817 (r45), ~100 m out at 41.5259, delivery 34.049,-117.435. The End-ride sheet animates in, so wait about 1 s before clicking driver-end-trip-confirm-button. Run pytest with -n 0. demo DEMO_VERSION=5, all demo stops and facilities are at 45 m; demo loads have no geofence_radius_m field (None).",
+  "rca_of_issue": "Link host trust: resolveApi() compares the api= host against a fixed allow-list. The local preview host e38e91c9 isn't on it, so the app falls back to DEFAULT_API = EXPO_PUBLIC_DRIVER_API_URL (remote naughty-hugle-13). Repro: open /d/<tok>?api=https://e38e91c9-... and start the ride; the console shows a 404 on naughty-hugle-13/api/driver/<tok>/ride/start. Fix: add the host to EXPO_PUBLIC_EXTRA_API_HOSTS."
+}

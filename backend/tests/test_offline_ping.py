@@ -8,7 +8,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 load_dotenv("/app/backend/.env")
 load_dotenv("/app/frontend/.env")
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL").rstrip("/")
-ON_SITE_TOKEN = "b8dbdcc3c583433bb0183c525f4ab4f52d74b231"  # RL-55018
+ON_SITE_TOKEN = (__import__("pymongo").MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]].loads.find_one({"load_number": "RL-55018"}) or {}).get("driver_token", "")  # RL-55018 (tokens regenerate on reseed)
 
 
 def _db():

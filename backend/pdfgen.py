@@ -44,7 +44,7 @@ def _trail(c, x, y, w, h, stop, pings):
         c.setFont("Helvetica", 9)
         c.drawString(x + 12, y + h / 2, "No facility coordinates")
         return
-    radius = float(stop.get("radius_m") or 300)
+    radius = float(stop.get("radius_m") or 45)
     pts = [((p["lng"] - lng0) * 111320 * math.cos(math.radians(lat0)), (p["lat"] - lat0) * 110540) for p in pings]
     extent = max([radius * 1.6] + [max(abs(a), abs(b)) * 1.1 for a, b in pts])
     scale = (min(w, h) / 2 - 14) / extent

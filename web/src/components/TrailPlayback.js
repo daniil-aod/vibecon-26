@@ -93,8 +93,8 @@ export const TrailPlayback = ({ pings = [], stops = [], events = [], tz, height 
           <FitBounds points={bounds} />
           <Follow pos={pos} on={follow} />
           {stops.filter((s) => s.lat != null).map((s) => (
-            <Circle key={s.id} center={[s.lat, s.lng]} radius={s.radius_m || 300} pathOptions={geofenceStyle}>
-              <Tooltip>{s.facility_name} · geofence {Math.round(s.radius_m || 300)} m</Tooltip>
+            <Circle key={s.id} center={[s.lat, s.lng]} radius={s.radius_m || 45} pathOptions={geofenceStyle}>
+              <Tooltip>{s.facility_name} · geofence {Math.round(s.radius_m || 45)} m</Tooltip>
             </Circle>
           ))}
           {stops.filter((s) => s.lat != null).map((s) => (
