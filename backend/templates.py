@@ -181,3 +181,54 @@ def driver_open_page(valid: bool, load_number: str, driver_name: str, deep_link:
         '<li>Open it once and allow location (keep <b>Precise</b> on).</li>'
         '<li>Come back to this text and tap the link again — your load opens automatically.</li></ol></div>'
         f'{stores}</main>{js}</body></html>')
+
+
+def billing_submission_email(fleet, snap, pdf_url, simulated=False):
+    """Final detention billing submission to the payor's accounts payable (secure PDF link; no attachment)."""
+    car = fleet.get("legal_name") or fleet.get("name") or "Carrier"
+    ld = snap["load"]
+    nums = ", ".join(i["number"] for i in snap["invoices"])
+    title = f"{car} - Detention billing - Load {ld.get('number')} - Invoice {nums}"
+    rows = [(f"{i['number']} ({i['stop_label']}, {i.get('facility') or ''})",
+             f"${i['outstanding']:,.2f} due" if i["outstanding"] else f"{i['status_label']}") for i in snap["invoices"]]
+    rows += [("Total outstanding", f"${snap['totals']['outstanding']:,.2f}"), ("Payment terms", snap["payment"]["terms_label"])]
+    inner = (
+        ('<p style="font-size:12px;color:#92400e"><strong>SIMULATED</strong> - test submission, not sent to a real recipient.</p>' if simulated else "")
+        + f'<p style="font-size:14px;line-height:1.6">Please find our supplemental detention billing for load '
+          f'<strong>{escape(ld.get("number") or "")}</strong> (completed {escape(str(ld.get("completed_at") or "")[:10])}). '
+          'This covers detention only; linehaul is billed separately.</p>'
+        + _rows(rows)
+        + _btn(pdf_url, "Download the billing packet (PDF)")
+        + '<p style="font-size:12px;color:#64748b">The packet includes the invoice(s), recorded in/out times, notice log, '
+          'contract clause and supporting documents. Online payment and evidence links are listed inside. '
+          'Reply to this email with any questions.</p>'
+    )
+    return title, _wrap(title, inner, car)
+
+
+def payment_reminder_email(fleet_name, invoice, kind, label, evidence_url):
+    amount = f"${invoice.get('amount', 0):,.2f}"
+    lead = {"due_soon": "A courtesy note that this detention invoice comes due soon under the agreed payment terms.",
+            "past_due": "Our records show this detention invoice is past its due date under the agreed payment terms.",
+            "final": "This detention invoice remains unpaid well past its due date. Please arrange payment or tell us if anything is disputed.",
+            "follow_up": "Following up on this detention invoice. Please let us know its status or if you need anything else."}.get(kind, "")
+    title = f"{label}: invoice {invoice.get('number')} - {amount}"
+    inner = (f'<p style="font-size:14px;line-height:1.6">{escape(lead)}</p>'
+             + _rows([("Invoice", invoice.get("number")), ("Load", invoice.get("load_number") or ""), ("Amount", amount)])
+             + _btn(evidence_url, "View evidence and pay"))
+    return title, _wrap(title, inner, fleet_name)
+
+
+def approval_request_email(fleet_name, load, stops, fmt_local, fleet):
+    title = f"Detention approval request - load {load.get('load_number')}"
+    rows = [(f"{s.get('type', '').title()} - {s.get('facility_name')}",
+             f"arrived {fmt_local(fleet, s.get('arrived_at'))}, ${s['billing']['amount']:,.2f} so far") for s in stops if s.get("arrived_at")]
+    inner = (f'<p style="font-size:14px;line-height:1.6">Our truck is being detained on load <strong>{escape(load.get("load_number") or "")}</strong>. '
+             'Please approve detention under the rate confirmation terms by replying to this email.</p>' + _rows(rows))
+    return title, _wrap(title, inner, fleet_name)
+
+
+def completion_report_email(fleet_name, load, text):
+    title = f"Load {load.get('load_number')} completed - no detention"
+    return title, _wrap(title, f'<p style="font-size:14px;line-height:1.6">{escape(text)}</p>', fleet_name)
+

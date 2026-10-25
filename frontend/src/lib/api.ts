@@ -13,7 +13,7 @@ export type Stop = {
 };
 export type DriverPayload = {
   load_number: string; fleet_name: string; driver_name?: string | null;
-  free_time_hours?: number; requires_signed_bol?: boolean; test_load?: boolean; stops: Stop[]; event?: string | null;
+  free_time_hours?: number; requires_signed_bol?: boolean; test_load?: boolean; transport_completed?: boolean; documents_needed?: string[]; stops: Stop[]; event?: string | null;
 };
 export type Fix = { lat: number; lng: number; accuracy: number; ts?: string };
 

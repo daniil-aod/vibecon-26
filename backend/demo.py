@@ -30,11 +30,11 @@ from storage import put_object, APP_NAME
 
 DEMO_FLEET_ID = "demo-dockclock-fleet"
 DEMO_OWNER_EMAIL = "abdowns4@gmail.com"
-DEMO_VERSION = 4  # bump to force a rebuild on next startup when features change
+DEMO_VERSION = 5  # bump to force a rebuild on next startup when features change
 PREVIEW_URL = "https://load-locator-4.preview.emergentagent.com"
 
 # collections that hold demo-fleet-scoped data (everything keyed by fleet_id)
-_SCOPED = ["loads", "invoices", "notices", "pings", "facilities", "brokers",
+_SCOPED = ["packets", "outbox", "loads", "invoices", "notices", "pings", "facilities", "brokers",
            "files", "payment_transactions"]
 
 
@@ -600,7 +600,11 @@ class _Seeder:
                  "reply_to_email": DEMO_OWNER_EMAIL, "notice_mode": "auto",
                  "owner_user_id": "demo-owner-pending", "app_url": PREVIEW_URL,
                  "created_at": iso(ago(days=40)), "invoice_seq": self.invoice_seq,
-                 "is_demo": True, "demo_version": DEMO_VERSION}
+                 "is_demo": True, "demo_version": DEMO_VERSION,
+                 # billing profile printed on packets (demo values, clearly fictitious)
+                 "legal_name": "Summit Ridge Carriers LLC (Demo)", "address": "4100 Demo Freight Way, Joliet, IL 60431",
+                 "phone": "(815) 555-0100", "billing_email": DEMO_OWNER_EMAIL, "mc_number": None, "usdot_number": None,
+                 "remittance_address": "Summit Ridge Carriers LLC, PO Box 0000 (demo), Joliet, IL 60431"}
         # preserve an already-claimed owner so a returning reviewer keeps access
         prev = await db.fleets.find_one({"id": self.fid}, {"_id": 0})
         if prev and prev.get("owner_user_id") and prev["owner_user_id"] != "demo-owner-pending":
@@ -645,12 +649,74 @@ async def _wipe(db):
         await db[col].delete_many({"fleet_id": DEMO_FLEET_ID})
 
 
+DEMO_BILLING = {
+    # load number: (billing terms, mode, signature_verified on delivery docs, simulate a provider failure)
+    "EVG-77421": ({"billing_company": "Evergreen Logistics - Accounts Payable", "billing_address": "PO Box 100 (demo), Portland, OR",
+                   "ap_email": "ap@evergreen-demo.example", "submission_channel": "email", "payment_terms_days": 30,
+                   "payment_terms_start": "invoice_submission", "approval_required": False, "notice_method": "email",
+                   "required_documents": [{"doc": "signed_bol", "stop": "final", "label": "Signed BOL"}]}, "auto", True, False),
+    "APX-30277": ({"billing_company": "Apex Freight AP", "ap_email": "billing@apex-demo.example", "submission_channel": "email",
+                   "payment_terms_days": 30, "payment_terms_start": "receipt_of_complete_docs", "approval_required": False,
+                   "required_documents": [{"doc": "pod", "stop": "final", "label": "Signed POD"}]}, "auto", False, False),
+    "APX-30188": ({"billing_company": "Apex Freight AP", "ap_email": "billing@apex-demo.example", "submission_channel": "email",
+                   "payment_terms_days": 30, "payment_terms_start": "invoice_submission", "approval_required": False,
+                   "required_documents": []}, "review", True, True),
+    "RL-55102": ({"billing_company": "Redline Brokerage", "submission_channel": "portal", "portal_url": "https://portal.redline-demo.example",
+                  "payment_terms_days": None, "approval_required": False,
+                  "required_documents": []}, "auto", True, False),
+    "EVG-77510": ({"billing_company": "Evergreen Logistics - Accounts Payable", "ap_email": "ap@evergreen-demo.example",
+                   "submission_channel": "email", "required_documents": []}, "auto", True, False),
+}
+
+
+async def _demo_billing(db):
+    """Run the real completion/finalization service on the demo loads. Every submission is SIMULATED."""
+    import finalize
+    if getattr(finalize.ctx, "db", None) is None:
+        return
+    for inv in await db.invoices.find({"fleet_id": DEMO_FLEET_ID}, {"_id": 0, "id": 1, "load_id": 1, "stop_id": 1}).to_list(100):
+        await db.invoices.update_one({"id": inv["id"]}, {"$set": {"stop_key": f"{inv['load_id']}:{inv['stop_id']}", "adjusts_invoice_id": None}})
+    for num, (terms, mode, sig, fail) in DEMO_BILLING.items():
+        ld = await db.loads.find_one({"fleet_id": DEMO_FLEET_ID, "load_number": num}, {"_id": 0})
+        if not ld:
+            continue
+        for st in ld["stops"]:
+            for b in st.get("bol", []):
+                b["doc_type"] = "signed_bol" if sig else "bol_photo"
+                if sig:
+                    b.update({"signature_verified": True, "signature_verified_by": "demo"})
+        await db.loads.update_one({"id": ld["id"]}, {"$set": {
+            "stops": ld["stops"], "billing_terms": terms, "term_sources": {f"billing.{k}": "confirmed" for k in terms},
+            "refs": {"bol_number": f"BOL-{num}", "pro_number": None, "po_number": None, "shipment_date": (ld["stops"][0].get("appointment") or "")[:10]},
+            "billing_setup": {"mode": mode, "confirmed_at": iso(now_utc()), "confirmed_by": "demo"}}})
+        if fail:
+            async def boom(job, _id=ld["id"]):
+                if job["load_id"] == _id:
+                    raise finalize.ctx.EmailError("SIMULATED provider rejection (demo of a failed submission)")
+            finalize.ctx.fault_hook = boom
+            await finalize.finalize_load(ld["id"], "demo_seed", "demo")
+            p = await db.packets.find_one({"load_id": ld["id"]}, {"_id": 0}, sort=[("version", -1)])
+            if p:
+                fresh = await db.loads.find_one({"id": ld["id"]}, {"_id": 0})
+                await finalize.submit_packet(fresh, await db.fleets.find_one({"id": DEMO_FLEET_ID}, {"_id": 0}), p, "demo")
+                await db.outbox.update_many({"load_id": ld["id"], "status": "pending"}, {"$set": {"status": "failed"}})
+                await finalize._sync_submission(ld["id"])
+            finalize.ctx.fault_hook = None
+        else:
+            await finalize.finalize_load(ld["id"], "demo_seed", "demo")
+
+
 async def seed_demo(db):
     """Full idempotent rebuild of the demo fleet. Returns a short summary."""
     await _wipe(db)
     s = _Seeder(db)
     await s.build()
     await s.commit()
+    try:
+        await _demo_billing(db)
+    except Exception as e:  # noqa
+        import logging
+        logging.getLogger("dockclock").warning(f"demo billing step failed: {e}")
     return {"fleet_id": DEMO_FLEET_ID, "loads": len(s.loads), "invoices": len(s.invoices),
             "pings": len(s.pings), "files": len(s.files), "version": DEMO_VERSION}
 

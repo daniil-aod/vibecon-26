@@ -17,7 +17,8 @@ import { DetentionMeter } from "@/components/DetentionMeter";
 import { FacilityMap } from "@/components/Maps";
 import { TrailPlayback } from "@/components/TrailPlayback";
 import { AuthImage } from "@/components/AuthImage";
-import LoadForm from "@/pages/LoadForm";
+import LoadForm, { fromLoad } from "@/pages/LoadForm";
+import { BillingPanel } from "@/components/BillingPanel";
 import { DriverEmailCard } from "@/components/DriverEmailCard";
 
 const EVL = { arrival: [LogIn, "Arrived"], departure: [LogOut, "Departed"], free_time_expired: [Clock, "Free time ended"], notice_sent: [BellRing, "Broker notice sent"], bol_uploaded: [Camera, "BOL photo uploaded"] };
@@ -78,7 +79,7 @@ export default function LoadDetail() {
         </div>
         <div className="flex flex-wrap gap-2">
           {load.ratecon_file_id && <Button data-testid="load-view-ratecon-button" variant="outline" size="sm" onClick={openRatecon}><FileText className="mr-1.5 h-4 w-4" />Rate con</Button>}
-          <Button data-testid="load-edit-button" variant="outline" size="sm" onClick={() => setEdit({ ...load, stops: load.stops.map(({ billing, ...s }) => s) })}><Pencil className="mr-1.5 h-4 w-4" />Edit terms</Button>
+          <Button data-testid="load-edit-button" variant="outline" size="sm" onClick={() => setEdit(fromLoad({ ...load, stops: load.stops.map(({ billing, ...s }) => s) }))}><Pencil className="mr-1.5 h-4 w-4" />Edit terms</Button>
           <Button data-testid="load-delete-button" variant="ghost" size="sm" onClick={() => setConfirmDel(true)}><Trash2 className="h-4 w-4" /></Button>
         </div>
       </div>
@@ -124,6 +125,8 @@ export default function LoadDetail() {
               </div>
             );
           })}
+
+          <BillingPanel api={api} loadId={id} tz={tz} stops={load.stops} onChanged={refresh} />
 
           <div>
             <h2 className="mb-3 font-display text-lg font-semibold">Truck playback</h2>

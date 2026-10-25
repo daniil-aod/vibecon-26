@@ -29,9 +29,10 @@ load_dotenv(ROOT_DIR / ".env")
 
 from clerk_auth import clerk_router, require_user  # noqa: E402
 import core  # noqa: E402
-from core import now_utc, iso, parse, stop_billing, notice_due_at, haversine_m  # noqa: E402
+from core import now_utc, iso, parse, stop_billing, notice_due_at, haversine_m, compute_load_billing  # noqa: E402
+import finalize  # noqa: E402
 from storage import put_object, get_object, init_storage, APP_NAME  # noqa: E402
-from emailer import send_email, EmailError  # noqa: E402
+from emailer import send_email, EmailError, EmailTimeout  # noqa: E402
 from ratecon import extract_ratecon  # noqa: E402
 from sms import send_sms, sms_configured  # noqa: E402
 import templates  # noqa: E402
@@ -358,6 +359,33 @@ class DetentionIn(BaseModel):
     notice_rule_text: Optional[str] = None
     requires_signed_bol: Optional[bool] = None
     clause_text: Optional[str] = None
+    rounding_rule: Optional[str] = None
+    per_day_definition: Optional[str] = None
+    billing_start_rule: Optional[str] = None
+    late_arrival_voids: Optional[bool] = None
+    late_grace_minutes: Optional[float] = None
+
+
+class BillingTermsIn(BaseModel):
+    billing_company: Optional[str] = None
+    billing_address: Optional[str] = None
+    ap_email: Optional[str] = None
+    use_broker_contact_for_billing: Optional[bool] = None
+    submission_channel: Optional[str] = None
+    portal_url: Optional[str] = None
+    submission_other_text: Optional[str] = None
+    requires_attachment: Optional[bool] = None
+    notice_recipient: Optional[str] = None
+    notice_method: Optional[str] = None
+    invoice_deadline_days: Optional[float] = None
+    invoice_deadline_trigger: Optional[str] = None
+    deadline_timezone: Optional[str] = None
+    required_documents: Optional[List[dict]] = None
+    approval_required: Optional[bool] = None
+    approval_method: Optional[str] = None
+    approval_rule_text: Optional[str] = None
+    payment_terms_days: Optional[float] = None
+    payment_terms_start: Optional[str] = None
 
 
 class StopIn(BaseModel):
@@ -369,6 +397,7 @@ class StopIn(BaseModel):
     lat: Optional[float] = None
     lng: Optional[float] = None
     radius_m: Optional[float] = None
+    terms_override: Optional[dict] = None
 
 
 class DriverIn(BaseModel):
@@ -387,6 +416,12 @@ class LoadIn(BaseModel):
     stops: List[StopIn] = []
     driver: DriverIn = DriverIn()
     low_confidence: List[str] = []
+    billing_terms: BillingTermsIn = BillingTermsIn()
+    refs: Optional[dict] = None
+    term_sources: Optional[dict] = None
+    term_refs: Optional[dict] = None
+    billing_mode: Optional[str] = None
+    confirm_billing: Optional[bool] = None
 
 
 async def upsert_facility(fleet_id: str, s: dict) -> dict:
@@ -431,6 +466,7 @@ async def build_stops(fleet_id: str, stops_in: List[StopIn], existing: Optional[
         sd = s.model_dump()
         prev = existing.get(sd.get("id") or "")
         if prev:
+            prev["terms_override"] = sd.get("terms_override") or prev.get("terms_override")
             changed_place = (sd.get("address") != prev.get("address") or sd.get("facility_name") != prev.get("facility_name"))
             prev.update({"type": sd["type"], "facility_name": sd.get("facility_name"), "address": sd.get("address"),
                          "appointment": sd.get("appointment"), "seq": i})
@@ -446,7 +482,35 @@ async def build_stops(fleet_id: str, stops_in: List[StopIn], existing: Optional[
                     "appointment": sd.get("appointment"), "lat": fac.get("lat"), "lng": fac.get("lng"),
                     "radius_m": fac.get("radius_m") or DEFAULT_RADIUS, "arrived_at": None, "departed_at": None,
                     "arrived_source": None, "departed_source": None, "events": [], "bol": [],
+                    "terms_override": sd.get("terms_override"),
                     "notice": {"status": "pending", "due_at": None, "sent_at": None}})
+    return out
+
+
+def _billing_fields(d: dict, m: dict, prev: dict | None = None) -> dict:
+    """Billing terms + refs + provenance. Values the dispatcher saved are 'confirmed'; extracted ones keep 'extracted'."""
+    bt = {k: v for k, v in (d.get("billing_terms") or {}).items()}
+    if bt.get("ap_email"):
+        bt["ap_email"] = bt["ap_email"].strip()
+        if not EMAIL_RE.match(bt["ap_email"]):
+            raise HTTPException(status_code=400, detail="Enter a valid accounts-payable email")
+    if bt.get("submission_channel") not in (None, "email", "portal", "other"):
+        raise HTTPException(status_code=400, detail="Submission method must be email, portal or other")
+    src = dict((prev or {}).get("term_sources") or {})
+    src.update(d.get("term_sources") or {})
+    out = {"billing_terms": bt, "refs": d.get("refs") or (prev or {}).get("refs") or {}, "term_sources": src,
+           "term_refs": d.get("term_refs") or (prev or {}).get("term_refs") or {}}
+    setup = dict((prev or {}).get("billing_setup") or {"mode": "review"})
+    if d.get("billing_mode") in ("auto", "review"):
+        if d["billing_mode"] != setup.get("mode"):
+            setup.pop("confirmed_at", None)
+        setup["mode"] = d["billing_mode"]
+    if d.get("confirm_billing"):
+        setup.update({"confirmed_at": iso(now_utc()), "confirmed_by": m["user_id"],
+                      "destination": finalize.destination({"billing_terms": bt, "broker": d.get("broker")})})
+    elif prev and finalize.destination({"billing_terms": bt, "broker": d.get("broker")}) != (setup.get("destination") or {}):
+        setup.pop("confirmed_at", None)  # destination changed -> must be re-confirmed
+    out["billing_setup"] = setup
     return out
 
 
@@ -471,7 +535,12 @@ async def create_load(body: LoadIn, m: dict = Depends(fleet_member)):
             "broker": d["broker"], "broker_id": broker_id, "detention": d["detention"], "stops": stops,
             "driver": d["driver"], "driver_token": token(), "ratecon_file_id": body.file_id,
             "low_confidence": d.get("low_confidence") or [], "sms_log": [], "status": "planned",
-            "created_by": m["user_id"], "created_at": iso(now_utc()), "updated_at": iso(now_utc())}
+            "created_by": m["user_id"], "created_at": iso(now_utc()), "updated_at": iso(now_utc()),
+            **_billing_fields(d, m)}
+    if body.file_id:
+        f = await db.files.find_one({"id": body.file_id, "fleet_id": m["fleet_id"]}, {"_id": 0, "extracted": 1})
+        load["source_documents"] = [{"kind": "ratecon", "file_id": body.file_id,
+                                     "version": ((f or {}).get("extracted") or {}).get("document_version")}]
     await db.loads.insert_one(dict(load))
     return await load_view(load, m["fleet"])
 
@@ -504,19 +573,15 @@ def load_status(load: dict, invoices: list) -> str:
     return "planned"
 
 
-def stops_with_billing(load: dict) -> list:
-    det = load.get("detention") or {}
-    out, billed = [], 0.0
-    for s in sorted(load.get("stops", []), key=lambda x: x.get("seq", 0)):
-        b = stop_billing(s, det, other_billed=billed)
-        billed += b["amount"]
-        out.append({**s, "billing": b})
-    return out
+def stops_with_billing(load: dict, fleet: dict | None = None) -> list:
+    """Every screen, invoice, PDF, email and Stripe amount reads this one calculation (core.compute_load_billing)."""
+    res = compute_load_billing(load, tz=tz_of(fleet) if fleet else None)
+    return [{**s, "billing": res["stops"][s["id"]]} for s in sorted(load.get("stops", []), key=lambda x: x.get("seq", 0))]
 
 
 async def load_view(load: dict, fleet: dict, full: bool = False) -> dict:
     invoices = await db.invoices.find({"load_id": load["id"]}, {"_id": 0}).to_list(50)
-    v = {**load, "stops": stops_with_billing(load), "status": load_status(load, invoices),
+    v = {**load, "stops": stops_with_billing(load, fleet), "status": load_status(load, invoices),
          "invoices": invoices, "driver_url": f"{fleet.get('app_url') or ''}/api/open/{load['driver_token']}"}
     v["detention_total"] = round(sum(s["billing"]["amount"] for s in v["stops"]), 2)
     if full:
@@ -547,12 +612,14 @@ async def update_load(load_id: str, body: LoadIn, m: dict = Depends(fleet_member
     broker_id = await upsert_broker(m["fleet_id"], d["broker"])
     upd = {"load_number": d.get("load_number") or load["load_number"], "carrier_name": d.get("carrier_name"),
            "linehaul_amount": d.get("linehaul_amount"), "broker": d["broker"], "broker_id": broker_id,
-           "detention": d["detention"], "stops": stops, "driver": d["driver"], "updated_at": iso(now_utc())}
+           "detention": d["detention"], "stops": stops, "driver": d["driver"], "updated_at": iso(now_utc()),
+           **_billing_fields(d, m, load)}
     # recompute notice due times for on-site stops
     for s in stops:
         if s.get("arrived_at") and s["notice"]["status"] == "pending":
             s["notice"]["due_at"] = iso(notice_due_at(parse(s["arrived_at"]), d["detention"]))
     await db.loads.update_one({"id": load_id}, {"$set": upd})
+    await process_load(await get_load(load_id, m["fleet_id"]), m["fleet"], trigger="terms_change", actor=m["user_id"])
     return await load_view(await get_load(load_id, m["fleet_id"]), m["fleet"], full=True)
 
 
@@ -826,7 +893,7 @@ async def adjust_stop(load_id: str, stop_id: str, body: AdjustIn, m: dict = Depe
             raise HTTPException(status_code=400, detail="Set an arrival time first")
         await record_departure(load, stop, dep, "dispatcher_edit", None, m["fleet"], note=body.reason)
     load = await get_load(load_id, m["fleet_id"])
-    await process_load(load, m["fleet"])
+    await process_load(load, m["fleet"], trigger="dispatcher_correction", actor=m["user_id"])
     return await load_view(await get_load(load_id, m["fleet_id"]), m["fleet"], full=True)
 
 
@@ -852,7 +919,7 @@ async def playback(load_id: str, m: dict = Depends(fleet_member)):
 
 async def playback_data(load: dict, stop_id: Optional[str] = None) -> dict:
     q = {"load_id": load["id"]}
-    pings = await db.pings.find(q, {"_id": 0, "lat": 1, "lng": 1, "ts": 1, "accuracy": 1, "stop_id": 1}).sort("ts", 1).to_list(20000)
+    pings = await db.pings.find(q, {"_id": 0, "lat": 1, "lng": 1, "ts": 1, "accuracy": 1, "stop_id": 1, "received_at": 1}).sort("ts", 1).to_list(20000)
     stops = stops_with_billing(load)
     if stop_id:
         stops = [s for s in stops if s["id"] == stop_id]
@@ -933,8 +1000,8 @@ async def record_departure(load, stop, at: datetime, source: str, coords, fleet,
     stop["events"] = [e for e in stop.get("events", []) if e["type"] != "departure"]
     stop["events"].append({"type": "departure", "at": iso(at), "source": source, "coords": coords, "note": note})
     if stop["notice"].get("status") in ("pending", "awaiting_approval") and not stop["notice"].get("sent_at"):
-        b = stop_billing(stop, load.get("detention") or {})
-        stop["notice"]["status"] = "not_needed" if b["billable_minutes"] <= 0 else "missed"
+        b = compute_load_billing({**load, "stops": [stop]})["stops"][stop["id"]]
+        stop["notice"]["status"] = "not_needed" if b["billable_minutes"] <= 0 and b["dwell_minutes"] < (b["free_minutes"] or 0) else "missed"
     await save_stop(load["id"], stop)
 
 
@@ -945,21 +1012,26 @@ async def deliver_notice(load, stop, fleet, manual_by=None):
         stop["notice"]["status"] = "no_email"
         await save_stop(load["id"], stop)
         return False, "No broker email on this load"
-    b = stop_billing(stop, load.get("detention") or {})
+    b = compute_load_billing({**load, "stops": [stop]}, tz=tz_of(fleet))["stops"][stop["id"]]
+    deadline = finalize._notice_deadline(stop, load.get("detention") or {}, b)
+    was_missed = stop["notice"].get("status") == "missed"
     coords = stop.get("arrived_coords") or {}
     lat, lng = coords.get("lat") or stop.get("lat"), coords.get("lng") or stop.get("lng")
     maps_url = f"https://www.openstreetmap.org/?mlat={lat}&mlon={lng}#map=17/{lat}/{lng}" if lat and lng else None
     subj, html = templates.notice_email(fleet["name"], load, stop, fmt_local(fleet, b.get("free_expires_at")),
                                         fmt_local(fleet, stop.get("arrived_at")), maps_url)
     try:
-        email_id = await send_email(to=to, subject=subj, html=html, reply_to=fleet.get("reply_to_email"))
+        if fleet.get("is_demo") or finalize.SUBMISSION_MODE != "live":
+            email_id = f"SIMULATED-{uid()[:8]}"  # no real broker email while in simulate mode
+        else:
+            email_id = await send_email(to=to, subject=subj, html=html, reply_to=fleet.get("reply_to_email"))
     except EmailError as e:
         stop["notice"]["status"] = "failed"
         stop["notice"]["error"] = str(e)
         await save_stop(load["id"], stop)
         return False, str(e)
     sent = iso(now_utc())
-    if fleet.get("reply_to_email"):
+    if fleet.get("reply_to_email") and not email_id.startswith("SIMULATED"):
         try:
             await send_email(to=fleet["reply_to_email"], subject=f"[Copy] {subj}", html=html)
         except EmailError:
@@ -969,7 +1041,8 @@ async def deliver_notice(load, stop, fleet, manual_by=None):
     await save_stop(load["id"], stop)
     await db.notices.insert_one({"id": uid(), "fleet_id": fleet["id"], "load_id": load["id"], "stop_id": stop["id"],
                                  "kind": "detention_notice", "to": to, "sent_at": sent, "email_id": email_id,
-                                 "on_time": bool(stop["notice"].get("due_at") and sent <= iso(parse(b.get("free_expires_at")) or now_utc())),
+                                 "on_time": bool(not was_missed and deadline and sent <= iso(deadline)),
+                                 "deadline": iso(deadline), "method": "email",
                                  "created_at": sent})
     return True, None
 
@@ -997,18 +1070,19 @@ async def ensure_invoice(load, stop, fleet):
     return inv
 
 
-async def process_load(load: dict, fleet: dict):
-    """Idempotent tick for one load: free-time events, broker notices, invoices."""
+async def process_load(load: dict, fleet: dict, trigger: str = "tick", actor: str | None = None):
+    """Idempotent: free-time events and time-sensitive notices for every stop (even while later stops are
+    still active), then the shared completion/finalization service (invoices, packet, submission)."""
     now = now_utc()
-    det = load.get("detention") or {}
+    allb = compute_load_billing(load, now, tz_of(fleet))["stops"]
     for stop in load.get("stops", []):
         if not stop.get("arrived_at"):
             continue
         changed = False
-        b = stop_billing(stop, det, now)
+        b = allb[stop["id"]]
         fe = parse(b.get("free_expires_at"))
         end = parse(stop.get("departed_at")) or now
-        if fe and end >= fe and b["free_minutes"] >= 0 and not any(e["type"] == "free_time_expired" for e in stop["events"]):
+        if fe and end >= fe and (b["free_minutes"] or 0) >= 0 and not any(e["type"] == "free_time_expired" for e in stop["events"]):
             stop["events"].append({"type": "free_time_expired", "at": iso(fe)})
             changed = True
         if not stop.get("departed_at"):
@@ -1022,8 +1096,7 @@ async def process_load(load: dict, fleet: dict):
                 changed = True
         if changed:
             await save_stop(load["id"], stop)
-        if stop.get("departed_at"):
-            await ensure_invoice(load, stop, fleet)
+    await finalize.finalize_load(load["id"], trigger, actor)
 
 
 # ---------------------------------------------------------------- driver (public link)
@@ -1036,8 +1109,12 @@ async def load_by_driver_token(tok: str) -> dict:
 
 
 def driver_payload(load, fleet):
-    stops = stops_with_billing(load)
-    return {"load_number": load.get("load_number"), "fleet_name": fleet.get("name"),
+    stops = stops_with_billing(load, fleet)
+    docs = finalize.documents_state(load)
+    transport = finalize.transport_state(load)["state"]
+    return {"transport_completed": transport == "completed",
+            "documents_needed": [x["message"] for x in docs["missing"]],
+            "load_number": load.get("load_number"), "fleet_name": fleet.get("name"),
             "driver_name": (load.get("driver") or {}).get("name"),
             "free_time_hours": (load.get("detention") or {}).get("free_time_hours"),
             "requires_signed_bol": (load.get("detention") or {}).get("requires_signed_bol"),
@@ -1141,12 +1218,12 @@ async def driver_ping(tok: str, body: PingIn):
             await record_departure(load, stop, ts, "geofence", coords, fleet)
             event = "departed"
     await db.pings.insert_one({"load_id": load["id"], "fleet_id": load["fleet_id"], "lat": body.lat, "lng": body.lng,
-                               "accuracy": acc, "ts": iso(ts), "stop_id": stop["id"] if stop else None})
+                               "accuracy": acc, "ts": iso(ts), "received_at": iso(now_utc()), "stop_id": stop["id"] if stop else None})
     prev = parse((load.get("last_ping") or {}).get("ts")) if (load.get("last_ping") or {}).get("ts") else None
     if not prev or ts >= prev:
         await db.loads.update_one({"id": load["id"]}, {"$set": {"last_ping": {"lat": body.lat, "lng": body.lng, "ts": iso(ts)}}})
     load = await load_by_driver_token(tok)
-    await process_load(load, fleet)
+    await process_load(load, fleet, trigger="geofence_departure" if event == "departed" else "ping")
     load = await load_by_driver_token(tok)
     return {"event": event, **driver_payload(load, fleet)}
 
@@ -1175,9 +1252,9 @@ async def driver_action(tok: str, stop_id: str, action: str, body: PingIn):
             raise HTTPException(status_code=400, detail="Departure already recorded")
         await record_departure(load, stop, ts, "driver_tap", coords, fleet)
     await db.pings.insert_one({"load_id": load["id"], "fleet_id": load["fleet_id"], "lat": body.lat, "lng": body.lng,
-                               "accuracy": body.accuracy or 50, "ts": iso(ts), "stop_id": stop_id})
+                               "accuracy": body.accuracy or 50, "ts": iso(ts), "received_at": iso(now_utc()), "stop_id": stop_id})
     load = await load_by_driver_token(tok)
-    await process_load(load, fleet)
+    await process_load(load, fleet, trigger=f"driver_{action}")
     return driver_payload(await load_by_driver_token(tok), fleet)
 
 
@@ -1203,6 +1280,7 @@ async def driver_bol(tok: str, stop_id: str, file: UploadFile = File(...)):
     stop.setdefault("bol", []).append(entry)
     stop["events"].append({"type": "bol_uploaded", "at": rec["created_at"]})
     await save_stop(load["id"], stop)
+    await process_load(await load_by_driver_token(tok), fleet, trigger="document_upload")
     return driver_payload(await load_by_driver_token(tok), fleet)
 
 
@@ -1212,9 +1290,9 @@ async def invoice_context(inv: dict):
     load = await db.loads.find_one({"id": inv["load_id"]}, {"_id": 0})
     if not load:
         raise HTTPException(status_code=404, detail="Load missing")
-    stops = stops_with_billing(load)
-    stop = next((s for s in stops if s["id"] == inv["stop_id"]), None)
     fleet = await db.fleets.find_one({"id": inv["fleet_id"]}, {"_id": 0})
+    stops = stops_with_billing(load, fleet)
+    stop = next((s for s in stops if s["id"] == inv["stop_id"]), None)
     notices = await db.notices.find({"load_id": load["id"], "stop_id": inv["stop_id"]}, {"_id": 0}).sort("sent_at", 1).to_list(50)
     pb = await playback_data(load, inv["stop_id"])
     return fleet, load, stop, notices, pb
@@ -1231,18 +1309,33 @@ async def get_invoice(inv_id: str, fleet_id: str) -> dict:
     return inv
 
 
-def reminder_plan(inv):
+def reminder_plan(inv, terms: dict | None = None):
+    """Reminders follow the confirmed payment terms. Unknown terms -> polite follow-ups, never 'overdue'."""
     sent = parse(inv.get("sent_at"))
     done = {r["day"] for r in inv.get("reminders", [])}
-    return [{"day": d, "due_at": iso(sent + timedelta(days=d)) if sent else None, "sent": d in done,
+    t = terms if terms is not None else (inv.get("payment_terms") or {})
+    days = t.get("payment_terms_days")
+    if days and t.get("payment_terms_start") in ("invoice_submission", "receipt_of_complete_docs"):
+        n = int(days)
+        sched = [(n - 3, "due_soon", "Upcoming due date"), (n + 1, "past_due", "Past due"), (n + 7, "past_due", "Past due"),
+                 (n + 21, "final", "Final notice")]
+        est = t.get("payment_terms_start") == "receipt_of_complete_docs"
+    elif inv.get("payment_terms") is None and terms is None:
+        sched = [(3, "legacy", "Reminder"), (7, "legacy", "Reminder"), (14, "legacy", "Reminder"), (30, "legacy", "Reminder")]
+        est = False
+    else:
+        sched = [(7, "follow_up", "Follow-up"), (14, "follow_up", "Follow-up"), (30, "follow_up", "Follow-up")]
+        est = False
+    return [{"day": d, "kind": k, "label": lbl + (" (estimated - receipt not confirmed)" if est and k != "due_soon" else ""),
+             "due_at": iso(sent + timedelta(days=d)) if sent else None, "sent": d in done,
              "sent_at": next((r["sent_at"] for r in inv.get("reminders", []) if r["day"] == d), None)}
-            for d in core.REMINDER_DAYS]
+            for d, k, lbl in sched if d > 0]
 
 
 @api.get("/invoices")
 async def list_invoices(m: dict = Depends(fleet_member)):
     invs = await db.invoices.find({"fleet_id": m["fleet_id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return [{**i, "reminder_plan": reminder_plan(i), "evidence_url": evidence_url(m["fleet"], i)} for i in invs]
+    return [{**i, "reminder_plan": reminder_plan(i), "evidence_url": evidence_url(m["fleet"], i)} for i in invs if i["status"] != "void"]
 
 
 @api.get("/invoices/{inv_id}")
@@ -1257,6 +1350,12 @@ async def invoice_detail(inv_id: str, m: dict = Depends(fleet_member)):
 def verify(inv, load, stop, notices, pb):
     if not inv.get("fingerprint"):
         return {"state": "unsealed"}
+    if inv.get("snapshot_packet_id"):
+        ok = core.canonical_hash(inv.get("sealed_evidence") or {}) == inv["fingerprint"]
+        return {"state": "verified" if ok else "changed", "fingerprint": inv["fingerprint"], "sealed_at": inv.get("sealed_at"),
+                "basis": "issued_snapshot", "packet_id": inv["snapshot_packet_id"]}
+    if inv.get("sealed_at"):  # evidence that arrives after sealing is a supplement, not a change to the sealed record
+        pb = {**pb, "pings": [p for p in pb["pings"] if not p.get("received_at") or p["received_at"] <= inv["sealed_at"]]}
     current = core.evidence_record(inv, load, stop, stop["billing"], notices, pb["pings"])
     fp = core.canonical_hash(current)
     if fp == inv["fingerprint"]:
@@ -1286,16 +1385,25 @@ async def send_invoice(inv_id: str, m: dict = Depends(fleet_member)):
         ev = core.evidence_record(inv, load, stop, stop["billing"], notices, pb["pings"])
         upd = {"amount": amount, "billable_label": inv["billable_label"], "sealed_evidence": ev,
                "fingerprint": core.canonical_hash(ev), "sealed_at": iso(now_utc()), "broker_email": to}
+    dest = finalize.destination(load)
+    if dest.get("recipient"):
+        to = dest["recipient"]
     subj, html = templates.invoice_email(fleet["name"], inv, load, stop, evidence_url(fleet, inv))
+    simulated = finalize.SUBMISSION_MODE != "live" or fleet.get("is_demo")
     try:
-        await send_email(to=to, subject=subj, html=html, reply_to=fleet.get("reply_to_email"))
+        if not simulated:
+            await send_email(to=to, subject=subj, html=html, reply_to=fleet.get("reply_to_email"))
     except EmailError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    if simulated:
+        upd["submission_simulated"] = True
     now = iso(now_utc())
     upd.update({"status": "sent", "last_emailed_at": now})
     if not inv.get("sent_at"):
         upd["sent_at"] = now
-    await db.invoices.update_one({"id": inv_id}, {"$set": upd, "$push": {"history": {"at": now, "action": "emailed", "to": to}}})
+    await db.invoices.update_one({"id": inv_id}, {"$set": upd, "$push": {"history": {
+        "at": now, "action": "emailed", "to": to, "note": "SIMULATED - no email sent" if simulated else None}}})
+    await finalize.finalize_load(load["id"], "invoice_sent", m["user_id"])
     return await invoice_detail(inv_id, m)
 
 
@@ -1333,6 +1441,12 @@ async def invoice_status(inv_id: str, body: InvoiceAction, m: dict = Depends(fle
 
 
 async def packet_pdf(inv: dict) -> bytes:
+    pid = inv.get("snapshot_packet_id") or inv.get("packet_id")
+    p = await db.packets.find_one({"id": pid}, {"_id": 0}) if pid else None
+    if p and p.get("pdf_file_id"):
+        rec = await db.files.find_one({"id": p["pdf_file_id"]}, {"_id": 0})
+        data, _ = await asyncio.to_thread(get_object, rec["storage_path"])
+        return data
     fleet, load, stop, notices, pb = await invoice_context(inv)
     bols = []
     for b in stop.get("bol", [])[:4]:
@@ -1360,7 +1474,7 @@ async def invoice_pdf(inv_id: str, m: dict = Depends(fleet_member)):
 
 async def invoice_by_token(tok: str) -> dict:
     inv = await db.invoices.find_one({"public_token": tok}, {"_id": 0})
-    if not inv or inv["status"] == "ready":
+    if not inv or inv["status"] in ("ready", "void"):
         raise HTTPException(status_code=404, detail="Invoice not found")
     return inv
 
@@ -1517,7 +1631,7 @@ async def period_summary(fleet, start: datetime, end: datetime):
                                 {"_id": 0}).to_list(2000)
     hours, billable, detained_loads = 0.0, 0.0, set()
     for ld in loads:
-        for s in stops_with_billing(ld):
+        for s in stops_with_billing(ld, fleet):
             dep = parse(s.get("departed_at"))
             if not s.get("arrived_at") or not dep or not (start <= dep < end):
                 continue
@@ -1659,17 +1773,25 @@ async def run_reminders(fleet):
     invs = await db.invoices.find({"fleet_id": fleet["id"], "status": "sent", "reminders_paused": {"$ne": True}}, {"_id": 0}).to_list(2000)
     for inv in invs:
         sent = parse(inv.get("sent_at"))
-        done = {r["day"] for r in inv.get("reminders", [])}
-        due = [d for d in core.REMINDER_DAYS if d not in done and now >= sent + timedelta(days=d)]
+        if not sent:
+            continue
+        plan = reminder_plan(inv)
+        due = [r for r in plan if not r["sent"] and now >= sent + timedelta(days=r["day"])]
         if not due:
             continue
-        day = max(due)
+        r = due[-1]
         try:
             f, load, stop, notices, pb = await invoice_context(inv)
-            subj, html = templates.invoice_email(fleet["name"], inv, load, stop, evidence_url(fleet, inv),
-                                                 tone_idx=core.REMINDER_DAYS.index(day))
-            await send_email(to=inv["broker_email"], subject=subj, html=html, reply_to=fleet.get("reply_to_email"))
-            entries = [{"day": d, "sent_at": iso(now), "skipped": d != day} for d in due]
+            if r["kind"] == "legacy":
+                subj, html = templates.invoice_email(fleet["name"], inv, load, stop, evidence_url(fleet, inv),
+                                                     tone_idx=core.REMINDER_DAYS.index(r["day"]) if r["day"] in core.REMINDER_DAYS else 0)
+            else:
+                subj, html = templates.payment_reminder_email(fleet["name"], inv, r["kind"], r["label"], evidence_url(fleet, inv))
+            simulated = inv.get("submission_simulated") or fleet.get("is_demo") or finalize.SUBMISSION_MODE != "live"
+            if not simulated:
+                await send_email(to=inv["broker_email"], subject=subj, html=html, reply_to=fleet.get("reply_to_email"))
+            entries = [{"day": d["day"], "sent_at": iso(now), "skipped": d["day"] != r["day"], "kind": d["kind"],
+                        "simulated": bool(simulated)} for d in due]
             await db.invoices.update_one({"id": inv["id"]}, {"$push": {"reminders": {"$each": entries}}})
         except Exception as e:  # noqa
             logger.warning(f"reminder failed for {inv['id']}: {e}")
@@ -1711,9 +1833,10 @@ async def run_tick():
         f = fmap.get(ld["fleet_id"])
         if f:
             try:
-                await process_load(ld, f)
+                await process_load(ld, f, trigger="cron_recovery")
             except Exception as e:  # noqa
                 logger.warning(f"tick load {ld['id']} failed: {e}")
+    await finalize.run_outbox()
     for f in fleets:
         await run_reminders(f)
         await run_weekly(f)
@@ -1761,6 +1884,398 @@ async def demo_reseed(request: Request):
     return await demo.seed_demo(db)
 
 
+# ---------------------------------------------------------------- completion, billing packet & submission
+
+async def _member_name(m):
+    return (m.get("name") or m.get("email") or m["user_id"])
+
+
+async def billing_view(load: dict, fleet: dict) -> dict:
+    comp = load.get("completion") or {}
+    billing = compute_load_billing(load, tz=tz_of(fleet))
+    trans = finalize.transport_state(load)
+    packets = await db.packets.find({"load_id": load["id"]}, {"_id": 0, "snapshot": 0}).sort("version", -1).to_list(20)
+    latest = await db.packets.find_one({"load_id": load["id"]}, {"_id": 0}, sort=[("version", -1)])
+    issued = await db.packets.find_one({"load_id": load["id"], "status": "issued"}, {"_id": 0}, sort=[("version", -1)])
+    jobs = await db.outbox.find({"load_id": load["id"]}, {"_id": 0, "html": 0}).sort("created_at", -1).to_list(20)
+    invs = await db.invoices.find({"load_id": load["id"]}, {"_id": 0, "sealed_evidence": 0}).to_list(50)
+    return {
+        "completion": comp, "transport": trans, "billing": billing, "destination": finalize.destination(load),
+        "setup": load.get("billing_setup") or {"mode": "review"}, "terms": load.get("billing_terms") or {},
+        "term_sources": load.get("term_sources") or {}, "refs": load.get("refs") or {},
+        "obligations": finalize.obligations(load, billing, trans, fleet),
+        "documents": finalize.documents_state(load), "required_documents": finalize.required_documents(load),
+        "approvals": load.get("approvals") or [], "conflicts": load.get("conflicts") or [],
+        "packets": packets, "issued_verification": finalize.verify_packet(issued) if issued else {"state": "none"},
+        "latest_snapshot": (latest or {}).get("snapshot"),
+        "source_comparison": await finalize.source_comparison(issued, load, fleet) if issued else {"state": "n/a"},
+        "outbox": jobs,
+        "invoices": [{**i, **finalize.invoice_balance(i), "reminder_plan": reminder_plan(i)} for i in invs],
+        "submission_mode": finalize.SUBMISSION_MODE, "attachments_supported": finalize.EMAIL_ATTACHMENTS_SUPPORTED,
+        "retention": finalize.RETENTION_POLICY,
+    }
+
+
+@api.get("/loads/{load_id}/billing")
+async def load_billing(load_id: str, m: dict = Depends(fleet_member)):
+    load = await get_load(load_id, m["fleet_id"])
+    return await billing_view(load, m["fleet"])
+
+
+async def _rerun(load_id, m, trigger):
+    await process_load(await get_load(load_id, m["fleet_id"]), m["fleet"], trigger=trigger, actor=m["user_id"])
+    return await billing_view(await get_load(load_id, m["fleet_id"]), m["fleet"])
+
+
+class SetupIn(BaseModel):
+    mode: str = "review"
+
+
+@api.post("/loads/{load_id}/billing/setup")
+async def billing_setup(load_id: str, body: SetupIn, m: dict = Depends(fleet_member)):
+    load = await get_load(load_id, m["fleet_id"])
+    if body.mode not in ("auto", "review"):
+        raise HTTPException(status_code=400, detail="Mode must be auto or review")
+    dest = finalize.destination(load)
+    await db.loads.update_one({"id": load_id}, {"$set": {"billing_setup": {
+        "mode": body.mode, "confirmed_at": iso(now_utc()), "confirmed_by": m["user_id"], "destination": dest}}})
+    return await _rerun(load_id, m, "billing_setup")
+
+
+@api.post("/loads/{load_id}/billing/submit")
+async def billing_submit(load_id: str, m: dict = Depends(fleet_member)):
+    """Dispatcher approval (review mode) or a revision issue. Same service as automatic submission."""
+    await process_load(await get_load(load_id, m["fleet_id"]), m["fleet"], trigger="dispatcher_review", actor=m["user_id"])
+    load = await get_load(load_id, m["fleet_id"])
+    comp = load.get("completion") or {}
+    if comp.get("blockers"):
+        raise HTTPException(status_code=400, detail="Resolve the listed items first: " + "; ".join(b["message"] for b in comp["blockers"][:3]))
+    p = await db.packets.find_one({"load_id": load_id}, {"_id": 0}, sort=[("version", -1)])
+    if not p:
+        raise HTTPException(status_code=400, detail="No billing packet yet (the load is not completed or has no detention)")
+    if p["status"] != "draft" and (comp.get("submission") or {}).get("state") in ("accepted", "queued", "sending", "uncertain"):
+        raise HTTPException(status_code=400, detail="This packet was already submitted")
+    await finalize.submit_packet(load, m["fleet"], p, m["user_id"])
+    return await billing_view(await get_load(load_id, m["fleet_id"]), m["fleet"])
+
+
+class RefIn(BaseModel):
+    reference: str = ""
+    note: str = ""
+
+
+@api.post("/loads/{load_id}/billing/portal-submitted")
+async def billing_portal_done(load_id: str, body: RefIn, m: dict = Depends(fleet_member)):
+    load = await get_load(load_id, m["fleet_id"])
+    sub = (load.get("completion") or {}).get("submission") or {}
+    if sub.get("state") not in ("awaiting_portal", "awaiting_manual"):
+        raise HTTPException(status_code=400, detail="This load is not waiting for a portal/manual submission")
+    if not body.reference.strip():
+        raise HTTPException(status_code=400, detail="Enter the portal confirmation or reference number")
+    p = await db.packets.find_one({"id": sub["packet_id"]}, {"_id": 0})
+    await finalize.mark_portal_submitted(load, p, body.reference.strip(), m["user_id"])
+    return await billing_view(await get_load(load_id, m["fleet_id"]), m["fleet"])
+
+
+class ResolveIn(BaseModel):
+    action: str
+    reference: str = ""
+
+
+@api.post("/outbox/{job_id}/resolve")
+async def outbox_resolve(job_id: str, body: ResolveIn, m: dict = Depends(fleet_member)):
+    """Reconcile an uncertain/failed submission: confirm it arrived, retry deliberately, or cancel."""
+    j = await db.outbox.find_one({"id": job_id, "fleet_id": m["fleet_id"]}, {"_id": 0})
+    if not j:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    now = iso(now_utc())
+    if body.action == "mark_accepted" and j["status"] in ("uncertain", "failed"):
+        if not body.reference.strip():
+            raise HTTPException(status_code=400, detail="Enter how you confirmed it (e.g. the payor's reply)")
+        await finalize._accepted(j, body.reference.strip(), "dispatcher_reconciled", m["user_id"])
+    elif body.action == "retry" and j["status"] in ("uncertain", "failed"):
+        await db.outbox.update_one({"id": job_id, "status": j["status"]}, {"$set": {"status": "pending", "next_attempt_at": now},
+                                   "$push": {"history": {"at": now, "event": "manual_retry", "by": m["user_id"]}}})
+        await finalize.run_outbox(limit=5)
+    elif body.action == "cancel" and j["status"] in ("uncertain", "failed", "pending"):
+        await db.outbox.update_one({"id": job_id}, {"$set": {"status": "failed", "error": "Cancelled by dispatcher"},
+                                   "$push": {"history": {"at": now, "event": "cancelled", "by": m["user_id"]}}})
+    else:
+        raise HTTPException(status_code=400, detail=f"Cannot {body.action} a {j['status']} submission")
+    await finalize._sync_submission(j["load_id"])
+    return await billing_view(await get_load(j["load_id"], m["fleet_id"]), m["fleet"])
+
+
+class CompleteIn(BaseModel):
+    reason: str
+    departed_at: Optional[str] = None
+    arrived_at: Optional[str] = None
+
+
+@api.post("/loads/{load_id}/complete")
+async def manual_complete(load_id: str, body: CompleteIn, m: dict = Depends(fleet_member)):
+    """GPS-failure fallback: dispatcher records the missing times; actor, time and reason are kept."""
+    load = await get_load(load_id, m["fleet_id"])
+    if not body.reason.strip():
+        raise HTTPException(status_code=400, detail="A reason is required to complete a load manually")
+    open_stops = [s for s in sorted(load["stops"], key=lambda x: x["seq"]) if not s.get("departed_at")]
+    if not open_stops:
+        raise HTTPException(status_code=400, detail="Every stop already has a departure")
+    if len(open_stops) > 1 and not all(s.get("arrived_at") for s in open_stops[:-1]):
+        raise HTTPException(status_code=400, detail="Earlier stops have no recorded times; set them with 'Adjust times' first")
+    for s in open_stops[:-1]:
+        if not s.get("arrived_at"):
+            raise HTTPException(status_code=400, detail=f"Set the times for {s.get('facility_name')} first")
+    last = open_stops[-1]
+    a = parse(body.arrived_at) if body.arrived_at else parse(last.get("arrived_at"))
+    dep = parse(body.departed_at) if body.departed_at else None
+    if not a or not dep:
+        raise HTTPException(status_code=400, detail="Enter the arrival and departure time for the final stop")
+    if dep <= a or dep > now_utc() + timedelta(minutes=5):
+        raise HTTPException(status_code=400, detail="Departure must be after arrival and not in the future")
+    note = f"Manual completion: {body.reason.strip()}"
+    if not last.get("arrived_at") or body.arrived_at:
+        await record_arrival(load, last, a, "dispatcher_edit", None, m["fleet"], note=note)
+        load = await get_load(load_id, m["fleet_id"])
+        last = next(s for s in load["stops"] if s["id"] == last["id"])
+    await record_departure(load, last, dep, "dispatcher_edit", None, m["fleet"], note=note)
+    await db.loads.update_one({"id": load_id}, {"$set": {"manual_completion": {
+        "by": m["user_id"], "by_name": await _member_name(m), "at": iso(now_utc()), "reason": body.reason.strip()}}})
+    return await _rerun(load_id, m, "manual_completion")
+
+
+DOC_TYPES = ("signed_bol", "pod", "lumper_receipt", "detention_log", "scale_ticket", "other", "bol_photo")
+
+
+@api.post("/loads/{load_id}/stops/{stop_id}/documents")
+async def upload_document(load_id: str, stop_id: str, doc_type: str = "pod", file: UploadFile = File(...),
+                          m: dict = Depends(fleet_member)):
+    load = await get_load(load_id, m["fleet_id"])
+    stop = next((s for s in load["stops"] if s["id"] == stop_id), None)
+    if not stop:
+        raise HTTPException(status_code=404, detail="Stop not found")
+    if doc_type not in DOC_TYPES:
+        raise HTTPException(status_code=400, detail="Unknown document type")
+    data = await file.read()
+    if not data or len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File is empty or larger than 15 MB")
+    ct = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
+    if not (ct.startswith("image/") or ct == "application/pdf"):
+        raise HTTPException(status_code=400, detail="Upload a photo or PDF")
+    ext = "pdf" if ct == "application/pdf" else {"image/png": "png", "image/webp": "webp"}.get(ct, "jpg")
+    rec = await store_file(m["fleet_id"], data, ct, ext, "document", {"load_id": load_id, "stop_id": stop_id, "doc_type": doc_type,
+                                                                      "retention": finalize.RETENTION_POLICY})
+    stop.setdefault("bol", []).append({"file_id": rec["id"], "sha256": rec["sha256"], "uploaded_at": rec["created_at"],
+                                       "content_type": ct, "doc_type": doc_type, "uploaded_by": m["user_id"]})
+    stop["events"].append({"type": "document_uploaded", "at": rec["created_at"], "note": doc_type})
+    await save_stop(load_id, stop)
+    return await _rerun(load_id, m, "document_upload")
+
+
+@api.post("/loads/{load_id}/stops/{stop_id}/documents/{file_id}/verify-signature")
+async def verify_signature(load_id: str, stop_id: str, file_id: str, m: dict = Depends(fleet_member)):
+    load = await get_load(load_id, m["fleet_id"])
+    stop = next((s for s in load["stops"] if s["id"] == stop_id), None)
+    doc = next((d for d in (stop or {}).get("bol", []) if d["file_id"] == file_id), None)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    doc.update({"signature_verified": True, "signature_verified_by": m["user_id"], "signature_verified_at": iso(now_utc())})
+    await save_stop(load_id, stop)
+    return await _rerun(load_id, m, "document_review")
+
+
+class NoticeRecordIn(BaseModel):
+    method: str
+    at: str
+    to: str = ""
+    reference: str = ""
+    note: str = ""
+
+
+@api.post("/loads/{load_id}/stops/{stop_id}/notice-record")
+async def record_notice(load_id: str, stop_id: str, body: NoticeRecordIn, m: dict = Depends(fleet_member)):
+    """Phone/portal notices the contract requires. The real time is recorded; it is judged against the deadline."""
+    load = await get_load(load_id, m["fleet_id"])
+    stop = next((s for s in load["stops"] if s["id"] == stop_id), None)
+    if not stop:
+        raise HTTPException(status_code=404, detail="Stop not found")
+    at = parse(body.at)
+    if body.method not in ("phone", "portal", "other", "email") or not at or at > now_utc() + timedelta(minutes=5):
+        raise HTTPException(status_code=400, detail="Enter the method and the actual time (not in the future)")
+    stop.setdefault("notice_records", []).append({"method": body.method, "at": iso(at), "to": body.to, "reference": body.reference,
+                                                  "note": body.note, "by": m["user_id"], "recorded_at": iso(now_utc())})
+    stop["events"].append({"type": f"notice_{body.method}_recorded", "at": iso(at), "note": f"{body.to} {body.reference}".strip()})
+    await save_stop(load_id, stop)
+    return await _rerun(load_id, m, "notice_record")
+
+
+class ApprovalIn(BaseModel):
+    stop_id: Optional[str] = None
+    method: str
+    approver: str
+    reference: str = ""
+    at: str
+    note: str = ""
+
+
+@api.post("/loads/{load_id}/approvals")
+async def record_approval(load_id: str, body: ApprovalIn, m: dict = Depends(fleet_member)):
+    await get_load(load_id, m["fleet_id"])
+    at = parse(body.at)
+    if not body.approver.strip() or not at:
+        raise HTTPException(status_code=400, detail="Enter who approved it and when")
+    rec = {"id": uid(), "stop_id": body.stop_id, "method": body.method, "approver": body.approver.strip(), "reference": body.reference,
+           "at": iso(at), "note": body.note, "recorded_by": m["user_id"], "recorded_at": iso(now_utc())}
+    await db.loads.update_one({"id": load_id}, {"$push": {"approvals": rec}})
+    return await _rerun(load_id, m, "approval")
+
+
+@api.post("/loads/{load_id}/approvals/request")
+async def request_approval(load_id: str, m: dict = Depends(fleet_member)):
+    """Prepare (and, by email, queue) an accessorial approval request even while final billing is blocked."""
+    load = await get_load(load_id, m["fleet_id"])
+    t = load.get("billing_terms") or {}
+    to = (t.get("notice_recipient") or (load.get("broker") or {}).get("email") or "").strip()
+    subj, html = templates.approval_request_email(m["fleet"]["name"], load, stops_with_billing(load, m["fleet"]), fmt_local, m["fleet"])
+    if (t.get("approval_method") or "email") != "email" or not EMAIL_RE.match(to):
+        return {"prepared": True, "sent": False, "subject": subj,
+                "detail": "Approval must be requested by " + (t.get("approval_method") or "the agreed method") + "; the text is ready to use."}
+    job = await finalize.enqueue("approval_request", load, m["fleet"], None, to, subj, html, {"channel": "email"})
+    await finalize.run_outbox(limit=3)
+    return {"prepared": True, "sent": True, "job_id": job["id"], "simulated": job.get("simulated")}
+
+
+@api.post("/loads/{load_id}/flags/{stop_id}/confirm")
+async def confirm_flag(load_id: str, stop_id: str, body: RefIn, m: dict = Depends(fleet_member)):
+    await get_load(load_id, m["fleet_id"])
+    await db.loads.update_one({"id": load_id}, {"$set": {f"confirmed_flags.{stop_id}": {
+        "by": m["user_id"], "at": iso(now_utc()), "note": body.note}}})
+    return await _rerun(load_id, m, "dispatcher_review")
+
+
+class ConflictIn(BaseModel):
+    field: str
+    value: str
+
+
+@api.post("/loads/{load_id}/conflicts/resolve")
+async def resolve_conflict(load_id: str, body: ConflictIn, m: dict = Depends(fleet_member)):
+    load = await get_load(load_id, m["fleet_id"])
+    cs = load.get("conflicts") or []
+    c = next((x for x in cs if x["field"] == body.field), None)
+    if not c:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+    c.update({"resolved": True, "value": body.value, "resolved_by": m["user_id"], "resolved_at": iso(now_utc())})
+    sec, key = body.field.split(".", 1) if "." in body.field else ("billing", body.field)
+    target = "detention" if sec == "detention" else "billing_terms"
+    val = c["ratecon"] if body.value == "ratecon" else c["agreement"] if body.value == "agreement" else body.value
+    await db.loads.update_one({"id": load_id}, {"$set": {"conflicts": cs, f"{target}.{key}": val, f"term_sources.{body.field}": "confirmed"}})
+    return await _rerun(load_id, m, "conflict_resolved")
+
+
+@api.post("/loads/{load_id}/agreement")
+async def upload_agreement(load_id: str, file: UploadFile = File(...), m: dict = Depends(fleet_member)):
+    """Optional broker-carrier agreement / billing instructions. Fills unknown terms; differences become conflicts."""
+    load = await get_load(load_id, m["fleet_id"])
+    data = await file.read()
+    if not data or len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File is empty or larger than 15 MB")
+    rec = await store_file(m["fleet_id"], data, "application/pdf", "pdf", "agreement", {"load_id": load_id, "retention": finalize.RETENTION_POLICY})
+    tmp = f"/tmp/{rec['id']}.pdf"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    try:
+        ex = await extract_ratecon(tmp, "application/pdf", doc_kind="broker-carrier agreement or billing instructions")
+    except Exception as e:  # noqa
+        raise HTTPException(status_code=502, detail=f"AI could not read this document ({str(e)[:120]})")
+    finally:
+        os.remove(tmp)
+    det, bt, src = dict(load.get("detention") or {}), dict(load.get("billing_terms") or {}), dict(load.get("term_sources") or {})
+    conflicts = [c for c in (load.get("conflicts") or []) if c.get("resolved")]
+    for sec, cur, new in (("detention", det, ex.get("detention") or {}), ("billing", bt, ex.get("billing") or {})):
+        for k, v in new.items():
+            if v in (None, "", []) or k in ("clause_text", "notice_rule_text", "stop_terms"):
+                continue
+            f = f"{sec}.{k}"
+            if cur.get(k) in (None, "", []):
+                cur[k] = v
+                src[f] = "agreement"
+            elif str(cur.get(k)).strip().lower() != str(v).strip().lower() and not any(c["field"] == f for c in conflicts):
+                conflicts.append({"field": f, "ratecon": cur.get(k), "agreement": v, "resolved": False, "detected_at": iso(now_utc())})
+    docs = (load.get("source_documents") or []) + [{"kind": "agreement", "file_id": rec["id"], "version": ex.get("document_version"),
+                                                     "uploaded_at": rec["created_at"]}]
+    await db.loads.update_one({"id": load_id}, {"$set": {"detention": det, "billing_terms": bt, "term_sources": src, "conflicts": conflicts,
+                                                         "source_documents": docs, "agreement_extracted": ex}})
+    return await _rerun(load_id, m, "agreement_upload")
+
+
+@api.get("/packets/{packet_id}/pdf")
+async def packet_download(packet_id: str, m: dict = Depends(fleet_member)):
+    p = await db.packets.find_one({"id": packet_id, "fleet_id": m["fleet_id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Packet not found")
+    rec = await db.files.find_one({"id": p["pdf_file_id"]}, {"_id": 0})
+    data, _ = await asyncio.to_thread(get_object, rec["storage_path"])
+    name = f"Detention-Billing-Packet-{p['snapshot']['load']['number']}-v{p['version']}{'' if p['status'] == 'issued' else '-DRAFT'}.pdf"
+    return Response(content=data, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{name}"'})
+
+
+@api.get("/public/packets/{tok}/pdf")
+async def public_packet(tok: str):
+    """Secure link sent to the payor: only issued/superseded packets, never drafts."""
+    p = await db.packets.find_one({"public_token": tok, "status": {"$in": ["issued", "superseded"]}}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Packet not found")
+    rec = await db.files.find_one({"id": p["pdf_file_id"]}, {"_id": 0})
+    data, _ = await asyncio.to_thread(get_object, rec["storage_path"])
+    return Response(content=data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="Detention-Billing-Packet-{p["snapshot"]["load"]["number"]}-v{p["version"]}.pdf"'})
+
+
+@api.post("/invoices/{inv_id}/adjust")
+async def adjust_invoice(inv_id: str, body: RefIn, m: dict = Depends(fleet_member)):
+    """Versioned correction of a sent/paid invoice: the original is untouched; only the difference is billed or credited."""
+    inv = await get_invoice(inv_id, m["fleet_id"])
+    adj = inv.get("pending_adjustment")
+    if not adj or abs(adj.get("delta") or 0) < 0.01:
+        raise HTTPException(status_code=400, detail="No pending correction for this invoice")
+    if not body.note.strip():
+        raise HTTPException(status_code=400, detail="A reason is required for a correction")
+    n = await db.invoices.count_documents({"adjusts_invoice_id": inv_id})
+    new = {**{k: inv.get(k) for k in ("fleet_id", "load_id", "stop_id", "load_number", "broker_id", "broker_name", "facility_id",
+                                      "facility_name", "stop_type")},
+           "id": uid(), "adjusts_invoice_id": inv_id, "number": f"{inv['number']}-A{n + 1}", "amount": round(abs(adj["delta"]), 2),
+           "kind": "supplement" if adj["delta"] > 0 else "credit_note",
+           "status": "ready" if adj["delta"] > 0 else "credit", "billable_label": inv.get("billable_label"),
+           "public_token": token(), "reminders": [], "reminders_paused": adj["delta"] < 0, "created_at": iso(now_utc()),
+           "history": [{"at": iso(now_utc()), "action": "correction", "note": body.note.strip(), "by": m["user_id"]}]}
+    await db.invoices.insert_one(dict(new))
+    await db.invoices.update_one({"id": inv_id}, {"$unset": {"pending_adjustment": ""}, "$push": {"history": {
+        "at": iso(now_utc()), "action": "corrected_by", "note": f"{new['number']} ({new['kind']}): {body.note.strip()}", "by": m["user_id"]}}})
+    return new
+
+
+class FleetBillingIn(BaseModel):
+    legal_name: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    billing_email: Optional[str] = None
+    mc_number: Optional[str] = None
+    usdot_number: Optional[str] = None
+    remittance_address: Optional[str] = None
+    completion_reports: Optional[bool] = None
+
+
+@api.patch("/fleet/billing-profile")
+async def fleet_billing_profile(body: FleetBillingIn, m: dict = Depends(fleet_member)):
+    require_owner(m)
+    upd = {k: (v.strip() if isinstance(v, str) else v) for k, v in body.model_dump().items() if v is not None}
+    if upd.get("billing_email") and not EMAIL_RE.match(upd["billing_email"]):
+        raise HTTPException(status_code=400, detail="Enter a valid billing contact email")
+    await db.fleets.update_one({"id": m["fleet_id"]}, {"$set": upd})
+    return await db.fleets.find_one({"id": m["fleet_id"]}, {"_id": 0})
+
+
 @api.get("/")
 async def root():
     return {"app": "DockClock", "ok": True}
@@ -1792,6 +2307,17 @@ async def startup():
     await db.invoices.create_index("fleet_id")
     await db.pings.create_index([("load_id", 1), ("ts", 1)])
     await db.users.create_index("user_id", unique=True)
+    async for inv in db.invoices.find({"stop_key": {"$exists": False}, "adjusts_invoice_id": None}, {"_id": 0, "id": 1, "load_id": 1, "stop_id": 1}):
+        await db.invoices.update_one({"id": inv["id"]}, {"$set": {"stop_key": f"{inv['load_id']}:{inv['stop_id']}"}})
+    await db.invoices.create_index("stop_key", unique=True, partialFilterExpression={"stop_key": {"$exists": True}})
+    await db.packets.create_index([("load_id", 1), ("version", 1)], unique=True)
+    await db.packets.create_index("public_token", unique=True, partialFilterExpression={"public_token": {"$exists": True}})
+    await db.outbox.create_index("idempotency_key", unique=True)
+    await db.outbox.create_index([("status", 1), ("next_attempt_at", 1)])
+    finalize.init(db=db, send_email=send_email, EmailError=EmailError, EmailTimeout=EmailTimeout, store_file=store_file,
+                  get_object=get_object, tz_of=tz_of, fmt_local=fmt_local, uid=uid, token=token, evidence_url=evidence_url,
+                  src_label=lambda x: {"geofence": "GPS geofence", "driver_tap": "Driver tap", "dispatcher_edit": "Dispatcher adjustment"}.get(x, x or "-"),
+                  email_re=EMAIL_RE, fault_hook=None)
     try:
         res = await demo.ensure_demo(db)
         logger.info(f"demo fleet: {res}")

@@ -101,3 +101,27 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+user_problem_statement: "DockClock - automatically finalize a completed load, generate a professional detention billing packet (pickup + delivery), and submit it to the correct company via the agreed billing method. Submissions SIMULATED (no real email). Default billing mode: dispatcher review. Retention: keep forever."
+backend:
+  - task: "Shared completion/finalization service (finalize.py) + authoritative calculation (core.compute_load_billing)"
+    implemented: true
+    working: true
+    file: "backend/finalize.py, backend/core.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "8 in-process scenario tests pass (backend/tests/test_finalization.py): known contract 75+112.50=187.50, per-load cap 150, POD gating + signature confirm, dedupe under concurrency, previously-submitted pickup, post-issue correction (credit note), late GPS supplement, manual completion, phone notice, portal, approval, zero detention, outbox timeout/crash/failure."
+frontend:
+  - task: "Load detail Completion & billing panel, Billing & submission form section, Settings billing profile"
+    implemented: true
+    working: "NA"
+    file: "web/src/components/BillingPanel.js, web/src/pages/LoadForm.js, web/src/pages/Settings.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+test_plan:
+  current_focus: ["Completion & billing panel", "driver-to-dashboard workflow"]
+  test_all: false
