@@ -109,7 +109,7 @@ def driver_link_email(fleet_name, driver_name, load_number, facility, url):
     inner = (f'<p style="font-size:15px;line-height:1.6">{hi} your load <strong>{escape(load_number)}</strong>'
              f'{" to " + escape(facility) if facility else ""} is ready in the DockClock Driver app.</p>'
              '<p style="font-size:15px;line-height:1.6">Open this email on your phone, tap the button, then press '
-             '<strong>Start trip</strong>. Your dock arrival and departure are stamped automatically until delivery.</p>'
+             '<strong>Start ride</strong>. Your dock arrival and departure are stamped automatically until delivery.</p>'
              + _btn(url, "Open in DockClock Driver")
              + '<p style="font-size:13px;color:#64748b">Don\'t have the app yet? The button shows you how to install it.</p>')
     return title, _wrap(title, inner, fleet_name)
@@ -173,7 +173,7 @@ def driver_open_page(valid: bool, load_number: str, driver_name: str, deep_link:
     hi = f"Hi {escape(driver_name)} — " if driver_name else ""
     return head + (
         f'<h1 data-testid="open-title">Open your load in the app</h1>'
-        f'<p>{hi}tap the button to open load <b>{escape(load_number)}</b> in the DockClock Driver app, then press <b>Start trip</b>.</p>'
+        f'<p>{hi}tap the button to open load <b>{escape(load_number)}</b> in the DockClock Driver app, then press <b>Start ride</b>.</p>'
         f'<a id="open-btn" class="btn pri" data-testid="open-app-button" href="{escape(deep_link)}">Open DockClock Driver</a>'
         '<div class="card" data-testid="open-install-steps"><div class="k">Don\'t have the app yet?</div>'
         '<h2>Install DockClock Driver</h2><ol>'

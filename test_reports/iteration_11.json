@@ -1,0 +1,35 @@
+{
+  "summary": "End-to-end test of the driver 'email app link' flow on https://naughty-hugle-13.preview.emergentagent.com. The web app was served on :3000 and the public /api routes to the local backend. Clerk sign-up through the UI is blocked for automation by Cloudflare Turnstile ('Verify you are human') in the Clerk dev instance. The OTP step was never reached. Workaround: created dockqa+clerk_test@example.com through the Clerk Backend API and signed in with a sign-in ticket (/sign-in?__clerk_ticket=...). The user then went through Onboarding, which created the fleet 'TEST_QA Haulers' (America/Chicago). In the UI: /app/loads/new, then manual entry with broker and driver email delivered@resend.dev, then save. On the load page, driver-email-card shows the email and there is no missing note. Email driver the app link shows the toast 'App link emailed to driver' and driver-last-email reads 'App link · ... · sent' (Resend email_id returned). The recap button shows 'Recap emailed to driver'. A one-time App link schedule was saved (row appeared) and deleted (row gone). Edit terms with the email cleared brings back the missing note and disables the email/recap/schedule buttons; re-adding the email re-enables them. fleet.app_url equals the preview origin. load-open-driver-link /api/open/{token} returns 200 HTML with dockclock://d/{token}?api=https%3A%2F%2Fnaughty-hugle-13.preview.emergentagent.com; an invalid token returns 404. Backend pytest: 15/15 passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST/PUT /api/loads", "issue": "driver.email is not validated or normalized on save. A typo like 'bob@' saves fine, then email-driver returns 400 'Add the driver's email first', which is misleading because an email is present. Validate with EMAIL_RE on save (400 'Enter a valid driver email') or change the send-time message to 'Driver email looks invalid'."},
+      {"endpoint": "templates.driver_link_email (templates.py:112) and the SMS body (server.py:581)", "issue": "The copy tells the driver to 'press Start trip', but the driver app button is now 'Start ride' (see iteration_10)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Load detail", "issues": ["The sonner toast (top-right) briefly covers the header user email/avatar and the 'Edit terms' button. This is cosmetic only."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_driver_email_link.py", "/app/tests/clerk_helper.py", "/app/test_reports/pytest/pytest_driver_email_link.xml"],
+  "action_items": [
+    "Optional: validate driver.email format on POST/PUT /api/loads, or give a clearer error at send time.",
+    "Optional: update 'Start trip' to 'Start ride' in the driver link email and the SMS text.",
+    "FYI: Clerk dev sign-up shows a Cloudflare Turnstile captcha, so automated UI sign-up (OTP 424242) can't finish. Future testing should use /app/tests/clerk_helper.py (Backend API user plus sign-in ticket), or turn off bot protection in the Clerk dev dashboard."
+  ],
+  "critical_code_review_comments": [
+    "fleet.app_url is last-writer-wins from any valid https origin passed to GET /api/me. If an owner opens the dashboard from another domain (e.g. a production custom domain), all later emailed/scheduled links switch to that domain. This is acceptable, but worth knowing.",
+    "load-open-driver-link uses a relative href '/api/open/...'. That is fine while the web app and the API share an origin; it breaks if the web app is ever hosted on a different origin than REACT_APP_BACKEND_URL. Using load.driver_url would be safer.",
+    "server.py is 1794 lines; consider splitting into routers (loads, driver emails/schedules, driver public endpoints)."
+  ],
+  "updated_files": ["/app/backend/tests/test_driver_email_link.py", "/app/tests/clerk_helper.py"],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% of requested flows (UI sign-up via captcha not automatable; ticket sign-in used)"},
+  "test_credentials": "Clerk dev user dockqa+clerk_test@example.com (user_3LBsgIprzYR8OeqHJX5HXjoyCXW). Get a sign-in ticket with: python /app/tests/clerk_helper.py dockqa+clerk_test@example.com, then open /sign-in?__clerk_ticket=<TICKET>. /app/memory/test_credentials.md does not exist.",
+  "seed_data_creation": "Fleet 'TEST_QA Haulers' (owner dockqa+clerk_test@example.com) and load TEST-QA-EMAIL-1 (id 9da2999e-7fe1-48a0-8daf-51d77f8338bb, driver email delivered@resend.dev) were left for reuse. Pytest loads are deleted on teardown. Demo fleet untouched. All emails went only to delivered@resend.dev.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Captcha blocks Clerk UI sign-up. Use clerk_helper.py tickets for UI and session_jwt() for API tests (see test_driver_email_link.py fixture). Tickets are single-use. The browser runs in UTC; the fleet tz is America/Chicago."
+}

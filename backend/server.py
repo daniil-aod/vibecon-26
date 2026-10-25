@@ -450,11 +450,20 @@ async def build_stops(fleet_id: str, stops_in: List[StopIn], existing: Optional[
     return out
 
 
+def _clean_driver(drv: dict) -> dict:
+    """Trim the driver's email and reject typos up front, so emailing the app link never fails later."""
+    email = (drv.get("email") or "").strip()
+    if email and not EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Enter a valid driver email (like name@example.com)")
+    return {**drv, "email": email}
+
+
 @api.post("/loads")
 async def create_load(body: LoadIn, m: dict = Depends(fleet_member)):
     if not body.stops:
         raise HTTPException(status_code=400, detail="Add at least one stop")
     d = body.model_dump()
+    d["driver"] = _clean_driver(d["driver"])
     stops = await build_stops(m["fleet_id"], body.stops)
     broker_id = await upsert_broker(m["fleet_id"], d["broker"])
     load = {"id": uid(), "fleet_id": m["fleet_id"], "load_number": d.get("load_number") or f"LOAD-{secrets.token_hex(3).upper()}",
@@ -533,6 +542,7 @@ async def load_detail(load_id: str, m: dict = Depends(fleet_member)):
 async def update_load(load_id: str, body: LoadIn, m: dict = Depends(fleet_member)):
     load = await get_load(load_id, m["fleet_id"])
     d = body.model_dump()
+    d["driver"] = _clean_driver(d["driver"])
     stops = await build_stops(m["fleet_id"], body.stops, load.get("stops"))
     broker_id = await upsert_broker(m["fleet_id"], d["broker"])
     upd = {"load_number": d.get("load_number") or load["load_number"], "carrier_name": d.get("carrier_name"),
@@ -578,7 +588,7 @@ async def text_driver(load_id: str, m: dict = Depends(fleet_member)):
     first = load["stops"][0] if load.get("stops") else {}
     body = (f"{fleet['name']} via DockClock: Hi {drv.get('name') or 'driver'}, your load "
             f"{load['load_number']} ({first.get('facility_name') or ''}) is ready: {url} "
-            f"Tap to open it in the DockClock Driver app, then press Start trip.")
+            f"Tap to open it in the DockClock Driver app, then press Start ride.")
     res = await send_sms(drv["phone"], body)
     entry = {"at": iso(now_utc()), "to": drv["phone"], "by": m["user_id"], **res}
     await db.loads.update_one({"id": load_id}, {"$push": {"sms_log": entry}})
@@ -628,7 +638,8 @@ async def send_driver_email(fleet, load, kind: str, freq: str = "once", by: str 
     drv = load.get("driver") or {}
     to = (drv.get("email") or "").strip()
     if not EMAIL_RE.match(to):
-        return {"sent": False, "reason": "no_email", "detail": "Add the driver's email first"}
+        return {"sent": False, "reason": "no_email",
+                "detail": "The driver's email looks invalid; fix it with Edit terms" if to else "Add the driver's email first"}
     if not fleet.get("app_url"):
         return {"sent": False, "reason": "no_app_url", "detail": "App address unknown yet; reload the page and try again"}
     if kind == "link":
