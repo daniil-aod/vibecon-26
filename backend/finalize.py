@@ -625,7 +625,7 @@ async def enqueue(kind, load, fleet, packet=None, to=None, subject=None, html=No
            "packet_id": packet["id"] if packet else None, "to": to, "subject": subject, "html": html,
            "copy_to": fleet.get("billing_email"), "reply_to": fleet.get("billing_email") or fleet.get("reply_to_email"),
            "status": "pending", "attempts": 0, "next_attempt_at": iso(now_utc()), "created_at": iso(now_utc()),
-           "simulated": SUBMISSION_MODE != "live", "history": [{"at": iso(now_utc()), "event": "queued"}], **(extra or {})}
+           "simulated": SUBMISSION_MODE != "live" or bool(fleet.get("is_demo")), "history": [{"at": iso(now_utc()), "event": "queued"}], **(extra or {})}
     try:
         await _db().outbox.insert_one(dict(job))
     except DuplicateKeyError:
@@ -773,7 +773,9 @@ async def _finalize(load, trigger, actor):
     paid_all = live_invoices and all(i["status"] in ("paid", "written_off") for i in live_invoices)
     comp["payment"] = {"state": "n/a" if not live_invoices else "paid" if paid_all else
                        "partial" if any(i["status"] == "paid" for i in live_invoices) else "unpaid",
-                       "outstanding": round(sum(b["outstanding"] for b in bal), 2), "paid": round(sum(b["paid"] for b in bal), 2)}
+                       "outstanding": round(max(0.0, sum(b["outstanding"] for b in bal)
+                                               - sum(i["amount"] for i in live_invoices if i.get("kind") == "credit_note")), 2),
+                       "paid": round(sum(b["paid"] for b in bal), 2)}
     if trans["state"] == "completed":
         if not live_invoices and billing["total"] <= 0 and not billing["missing_terms"]:
             comp["packet"] = {"state": "none"}
@@ -826,7 +828,7 @@ async def submit_packet(load, fleet, packet, actor, d=None):
         await db.packets.update_one({"id": p["id"]}, {"$set": {"public_token": tok}})
         pdf_url = f"{fleet.get('app_url') or ''}/api/public/packets/{tok}/pdf"
     snap = p["snapshot"]
-    subj, html = templates.billing_submission_email(fleet, snap, pdf_url, simulated=SUBMISSION_MODE != "live")
+    subj, html = templates.billing_submission_email(fleet, snap, pdf_url, simulated=SUBMISSION_MODE != "live" or bool(fleet.get("is_demo")))
     job = await enqueue("billing_submission", load, fleet, p, d["recipient"], subj, html, {"channel": "email", "pdf_url": pdf_url})
     await _sync_submission(load["id"])
     if job["status"] == "pending":

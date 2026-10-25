@@ -1,6 +1,6 @@
 # Iteration 9: geofence-driven trip on the LOCAL TEST-0001 load (start anywhere, no anchoring), BOL completes trip.
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 import requests

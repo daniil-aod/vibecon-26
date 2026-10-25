@@ -17,7 +17,7 @@ from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 from starlette.datastructures import UploadFile, Headers  # noqa: E402
 import server  # noqa: E402
 import finalize  # noqa: E402
-from core import now_utc, iso, parse  # noqa: E402
+from core import now_utc, iso  # noqa: E402
 
 P0 = (41.5250, -88.0817)   # pickup
 D0 = (34.0922, -117.4350)  # delivery
@@ -216,7 +216,7 @@ def test_previously_submitted_pickup_not_billed_twice_and_correction_versioned()
         ld = await get(db, load["id"])
         assert ld["completion"]["blockers"] == [] and ld["completion"]["submission"]["state"] == "revision_review"
         assert not (await db.invoices.find_one({"id": dinv["id"]})).get("pending_adjustment")
-        r = await server.billing_submit(load["id"], m)
+        await server.billing_submit(load["id"], m)
         v2 = await db.packets.find_one({"load_id": load["id"], "version": 2}, {"_id": 0})
         assert v2["status"] == "issued" and v2["snapshot"]["totals"]["outstanding"] == 150.0
         v1 = await db.packets.find_one({"id": p["id"]}, {"_id": 0})

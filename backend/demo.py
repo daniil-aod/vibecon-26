@@ -545,7 +545,7 @@ class _Seeder:
         e_arr, e_dep = ago(days=4, hours=3), ago(days=4, hours=1, minutes=45)  # 1h15 dwell, under 2h free
         edl, efac = self._make_stop(0, "delivery", "joliet", appt=ago(days=4, hours=3).strftime("%Y-%m-%dT13:00"),
                                     arrived=e_arr, departed=e_dep, notice_status="not_needed")
-        detE = det_for("evergreen", 1620)
+        det_for("evergreen", 1620)
         loadE, _ = self._load("EVG-77510", "evergreen", "Summit Ridge Carriers LLC", 1620,
                               [(edl, efac)], {"name": "Luis Moreno", "phone": "+13125550111"}, "completed")
         self.pings += make_trail(self.fid, loadE["id"], edl, e_arr, e_dep)

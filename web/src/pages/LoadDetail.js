@@ -25,6 +25,7 @@ const EVL = { arrival: [LogIn, "Arrived"], departure: [LogOut, "Departed"], free
   document_uploaded: [FileText, "Document uploaded"], notice_phone_recorded: [BellRing, "Phone notice recorded"], notice_portal_recorded: [BellRing, "Portal notice recorded"] };
 const SRC = { geofence: "geofence", driver_tap: "driver tap + GPS", dispatcher_edit: "dispatcher edit" };
 const toLocalInput = (iso) => { if (!iso) return ""; const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+const finalizeMsg = (load) => (load?.billing_setup ? "Invoice submitted to the billing contact (simulated in test mode)" : "Invoice emailed to broker");
 
 export default function LoadDetail() {
   const { id } = useParams();
@@ -61,7 +62,7 @@ export default function LoadDetail() {
   }, "Times updated");
   const saveGeo = () => act("geo", async () => { await api.patch(`/facilities/${geo.facility_id}`, { lat: geo.lat, lng: geo.lng, radius_m: geo.radius_m }); setGeo(null); }, "Geofence saved");
   const sendNotice = (s) => act(`n${s.id}`, () => api.post(`/loads/${id}/stops/${s.id}/notice`), "Broker notice sent");
-  const sendInvoice = (inv) => act(`i${inv.id}`, () => api.post(`/invoices/${inv.id}/send`), "Invoice emailed to broker");
+  const sendInvoice = (inv) => act(`i${inv.id}`, () => api.post(`/invoices/${inv.id}/send`), finalizeMsg(load));
   const del = () => act("del", async () => { await api.delete(`/loads/${id}`); nav("/app/loads"); }, "Load deleted");
 
   if (!load) return <div className="space-y-4"><Skeleton className="h-24" /><Skeleton className="h-80" /></div>;

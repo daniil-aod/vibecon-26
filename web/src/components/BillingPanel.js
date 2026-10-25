@@ -64,7 +64,7 @@ export function BillingPanel({ api, loadId, tz, stops, onChanged }) {
         <Chip testid="state-documents" label="Documents" value={docs.state === "complete" ? "Complete" : docs.state === "none_required" ? "None required" : `${(docs.missing || []).length + (docs.unverified || []).length} open`} tone={docs.state === "missing" ? "warn" : "ok"} />
         <Chip testid="state-approvals" label="Approvals" value={{ approved: "Recorded", not_required: "Not required", missing: "Missing", unknown: "Not stated" }[c.approvals?.state] || "-"} tone={c.approvals?.state === "missing" ? "warn" : c.approvals?.state === "unknown" ? "idle" : "ok"} />
         <Chip testid="state-packet" label="Packet" value={c.packet?.state === "issued" ? `Issued v${c.packet.version}` : c.packet?.state === "draft" ? `Draft v${c.packet.version}` : "None"} tone={c.packet?.state === "issued" ? "ok" : "idle"} />
-        <Chip testid="state-submission" label="Submission" value={subLabel + (sub.simulated ? " (simulated)" : "")} tone={subTone} />
+        <Chip testid="state-submission" label="Submission" value={blockers.some((x) => x.code === "correction_pending") ? "Correction pending" : subLabel + (sub.simulated ? " (simulated)" : "")} tone={blockers.some((x) => x.code === "correction_pending") ? "warn" : subTone} />
         <Chip testid="state-payment" label="Payment" value={pay.state === "n/a" ? "-" : `${pay.state} · ${money(pay.outstanding || 0)} open`} tone={pay.state === "paid" ? "ok" : "idle"} />
       </div>
       {tr.state === "completed" && <p className="mt-2 text-xs text-muted-foreground">Completed {fmtTime(tr.completed_at, tz)} via {tr.manual ? `manual completion by dispatcher (${tr.manual.reason})` : ({ geofence: "GPS geofence exit", driver_tap: "driver tap", dispatcher_edit: "dispatcher adjustment" }[tr.source] || tr.source)}. Detention calculated: <b>{money(c.billing_total || 0)}</b>.</p>}
@@ -160,7 +160,7 @@ export function BillingPanel({ api, loadId, tz, stops, onChanged }) {
       {(b.invoices || []).filter((i) => i.pending_adjustment).map((i) => <div key={i.id} className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs" data-testid={`pending-adjustment-${i.number}`}>
         <span>{i.number} was issued at {money(i.amount)}; the corrected amount is {money(i.pending_adjustment.new_amount)}. The original stays unchanged; a correction bills or credits only the difference.</span>
         <Input className="w-48" placeholder="Reason" value={f.adjNote} onChange={(e) => set("adjNote", e.target.value)} />
-        <Button size="sm" variant="outline" onClick={() => run("adj", () => api.post(`/invoices/${i.id}/adjust`, { note: f.adjNote }), "Correction issued")}>Issue correction</Button></div>)}
+        <Button size="sm" variant="outline" data-testid={`issue-correction-${i.number}`} onClick={() => run("adj", () => api.post(`/invoices/${i.id}/adjust`, { note: f.adjNote }), "Correction issued")}>Issue correction</Button></div>)}
 
       <div className="mt-5 grid gap-3 md:grid-cols-2">
         {finalOpen && <div className="rounded-xl border p-3 text-xs" data-testid="manual-complete-card">

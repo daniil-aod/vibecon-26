@@ -1,5 +1,4 @@
 import os
-import io
 import re
 import uuid
 import hmac
@@ -1381,7 +1380,7 @@ async def send_invoice(inv_id: str, m: dict = Depends(fleet_member)):
         # early (e.g. pickup) submission before the load completes: only to the confirmed AP email destination
         if not (load["billing_setup"].get("confirmed_at") and dst["channel"] == "email" and dst["recipient"]):
             raise HTTPException(status_code=400, detail="Confirm an email billing destination for this load before sending an early invoice")
-    to = ((load.get("broker") or {}).get("email") or "").strip()
+    to = (finalize.destination(load).get("recipient") or (load.get("broker") or {}).get("email") or "").strip()
     if not to:
         raise HTTPException(status_code=400, detail="Add the broker's email on the load first")
     if not fleet.get("app_url"):
