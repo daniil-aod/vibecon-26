@@ -5,7 +5,7 @@
 > tested, how everything is wired, the demo fleet, known gotchas, and what to do next.
 > Companion docs: `backend/DEMO.md` (demo fleet), `memory/PRD.md` (roadmap), `design_guidelines.md` (UI).
 
-Preview URL: **https://load-locator-4.preview.emergentagent.com**
+Preview URL: **https://naughty-hugle-13.preview.emergentagent.com**
 
 ---
 

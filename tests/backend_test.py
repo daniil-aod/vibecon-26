@@ -14,7 +14,7 @@ from smoke_backend import get_user, tok
 load_dotenv("/app/backend/.env")
 
 # Configuration
-BASE_URL = "https://load-locator-4.preview.emergentagent.com/api"
+BASE_URL = "https://naughty-hugle-13.preview.emergentagent.com/api"
 CLERK_SECRET = os.environ["CLERK_SECRET_KEY"]
 WEBHOOK_CRON_SECRET = os.environ["WEBHOOK_CRON_SECRET"]
 
@@ -104,7 +104,7 @@ def main():
     
     # Test 2: Get user info with token
     def test_me():
-        r = requests.get(f"{BASE_URL}/me", headers=runner.headers(), params={"origin": "https://load-locator-4.preview.emergentagent.com"})
+        r = requests.get(f"{BASE_URL}/me", headers=runner.headers(), params={"origin": "https://naughty-hugle-13.preview.emergentagent.com"})
         assert r.status_code == 200, f"Expected 200, got {r.status_code}"
         data = r.json()
         assert "user" in data, "Missing user in response"
@@ -321,7 +321,7 @@ def main():
     def test_checkout():
         r = requests.post(
             f"{BASE_URL}/public/evidence/{runner.public_token}/checkout",
-            json={"origin_url": "https://load-locator-4.preview.emergentagent.com"}
+            json={"origin_url": "https://naughty-hugle-13.preview.emergentagent.com"}
         )
         assert r.status_code == 200, f"Expected 200, got {r.status_code}"
         data = r.json()

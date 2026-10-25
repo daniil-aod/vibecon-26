@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv("/app/backend/.env")
 SK = os.environ["CLERK_SECRET_KEY"]
 B = "http://localhost:8001/api"
-ORIGIN = "https://load-locator-4.preview.emergentagent.com"
+ORIGIN = "https://naughty-hugle-13.preview.emergentagent.com"
 
 
 def bapi(path, body=None, method="POST"):

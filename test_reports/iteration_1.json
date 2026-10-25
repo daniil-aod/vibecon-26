@@ -105,8 +105,8 @@
     }
   },
   "test_environment": {
-    "backend_url": "https://load-locator-4.preview.emergentagent.com/api",
-    "frontend_url": "https://load-locator-4.preview.emergentagent.com",
+    "backend_url": "https://naughty-hugle-13.preview.emergentagent.com/api",
+    "frontend_url": "https://naughty-hugle-13.preview.emergentagent.com",
     "test_user": "smoke+clerk_test@example.com",
     "test_fleet": "Smoke Haulers",
     "test_pdf": "/tmp/test_ratecon.pdf",
