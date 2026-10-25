@@ -1,0 +1,30 @@
+{
+  "summary": "Tested the frontend only, at 390x844 web with mocked geolocation, on the LOCAL TEST-0001 load. The load was reset before and after; the remote naughty-hugle-13 backend was not touched. The Start ride / zone timer / End ride flow passed. Paste link + Open load leads to driver-start-button labeled 'Start ride'. There is no driver-arrived-button or driver-departed-button, and no 'at the dock' / 'I'm leaving' text. Start at 41.88,-87.63: driver-ride-time counted 00:00:00 -> 00:00:02, driver-zone-idle was shown, there was no zone timer and no arrival, and the start card was hidden. Entering pickup: driver-zone-timer appeared within about 1 s of the ping, showing 'IN ZONE FOR · MIDWEST DISTRIBUTION CENTER', a counting driver-zone-time and 'Free time left 01:59:59'. The toast 'Entered zone · Midwest Distribution Center' appeared and the main timer kept counting without resetting. Reloading mid-ride kept the original start (00:05 -> 00:08), with no start card, the zone timer still visible and GPS re-attached. Moving about 1 km away: the zone timer went away, the toast 'Left zone · Midwest Distribution Center · 0m in zone' appeared, the stop showed In/Out times, the main timer kept running and delivery became the current stop. Delivery in and out behaved the same, with both toasts. After all stops: note bolToFinish, then after the BOL upload it changed to 'All stops are done. Tap End ride below...'. Tracking was NOT auto-stopped after the BOL (pings 6->7). The End ride sheet's Keep tracking option leaves tracking on. Confirm: 'Trip time · ended 3:45 AM', the timer is frozen, End ride is hidden, the GPS chip shows 'Tracking finished', the start card is NOT shown, no pings are sent after ending (5->5), and the ended state survives a reload. Spanish was checked for Iniciar viaje, Terminar viaje, the start card, 'Tiempo de viaje · inició/terminó', 'EN ZONA POR', zoneWaiting, the toasts 'Entraste a la zona' / 'Saliste de la zona ... en zona', allDoneP and 'Rastreo terminado'. Reset test trip from the UI brings the start card back. Deprecated packages: none detected (no expo-av / expo-barcode-scanner / expo-background-fetch).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "GPS idle chip / reset toast (EN)", "issue": "These strings still say 'Start trip' while the button is now 'Start ride': gpsIdle 'Tap Start trip to share your location' (i18n.ts:39) and resetDone '...press Start trip to try again' (i18n.ts:126). The leftover EN endTrip 'End trip (stop recording)' at i18n.ts:118 looks unused.", "testID": "driver-gps-status", "priority": "low"},
+      {"component": "All-done note (bolToFinish)", "issue": "The EN/ES copy says 'Tracking stays on until it's attached', but tracking no longer auto-stops after the BOL (verified: pings continue and End ride is still required). This misleads drivers. Reference: i18n.ts:117 and the ES string at :242.", "testID": "driver-all-done-note", "priority": "low"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_10.json"],
+  "action_items": [
+    "Update the EN gpsIdle and resetDone strings from 'Start trip' to 'Start ride'.",
+    "Change the bolToFinish EN/ES copy so it no longer says tracking stops when the BOL is attached (e.g. 'Last step: attach the photo of the signed BOL below, then tap End ride.').",
+    "Optional: in the zone toast effect ([token].tsx:105-112), a stop that gets both arrived_at and departed_at in one payload (e.g. after an offline queue flush) only fires the 'Entered' toast; consider firing both or only 'Left'."
+  ],
+  "critical_code_review_comments": [
+    "If the driver taps End ride while inside a zone, that stop's departed_at is never stamped (tracking stops, so no departing ping). The server-side dwell/detention for that stop may stay open; consider stamping departure on End ride or warning in the sheet.",
+    "Once a ride has ended, a real (non-test) load has no way to restart tracking (the start card is hidden while ride.endedAt exists). The confirm sheet mitigates this, but an accidental end cannot be undone by the driver.",
+    "Not verified: the 'Ride ended' toast after confirming. It was not found about 5 s after confirm, probably because it had already disappeared. All other end-state assertions passed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped as requested)", "frontend": "100% of requested flows (2 low-priority copy issues)"},
+  "seed_data_creation": "None. TEST-0001 was reset before and after (final state: both stops have no arrived/departed timestamps and bol_count 0).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use the LOCAL TEST-0001 token 15fea12a... Pickup is 41.525,-88.0817 and delivery is 34.049,-117.435 (r300); 'leave' is lat +0.009. Geofence stamps arrive within about 1 s of a set_geolocation move (more than 25 m moved triggers an immediate ping). The End ride sheet is a slide Modal: wait about 1.2 s after it appears before clicking the confirm button, otherwise you get 'Element is outside of the viewport'. Ride state lives in localStorage dockclock.ride.<token>, so each browser_automation call starts fresh."
+}

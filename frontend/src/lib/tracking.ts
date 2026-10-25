@@ -61,7 +61,7 @@ async function flush(t: Trip): Promise<boolean> {
       const data = await driverApi.ping(t.api, t.token, q[0]);
       q.shift();
       emit("payload", data);
-      if (tripComplete(data)) { await saveQueue(); await stopTracking("delivered"); return true; }
+
     } catch (e) {
       if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 404 && e.status !== 408 && e.status !== 429) { q.shift(); continue; }
       await saveQueue();
@@ -156,7 +156,9 @@ export async function startTracking(token: string, api: string): Promise<Trackin
     try { await startBackground(); mode = "background"; } catch { mode = "foreground"; }
   }
   if (mode === "foreground") await startForeground();
-  trip = { token, api, startedAt: new Date().toISOString(), mode };
+  // Keep the ride's original start time when tracking is re-attached (app reopened).
+  trip = { token, api, startedAt: prev?.token === token ? prev.startedAt : new Date().toISOString(), mode };
+  await storage.removeItem(rideKey(token));
   last = { t: 0, lat: null, lng: null };
   await storage.setJSON(TRIP_KEY, trip);
   return mode;
@@ -174,7 +176,19 @@ export async function resumeTracking(): Promise<TrackingMode | null> {
   return startTracking(t.token, t.api);
 }
 
+export type Ride = { startedAt: string; endedAt?: string };
+const rideKey = (tok: string) => `dockclock.ride.${tok}`;
+/** The ride for this load: running (from the active trip) or the last ended one. */
+export async function getRide(tok: string): Promise<Ride | null> {
+  const t = await getTrip();
+  if (t?.token === tok) return { startedAt: t.startedAt };
+  return storage.getJSON<Ride>(rideKey(tok));
+}
+export async function clearRide(tok: string) { await storage.removeItem(rideKey(tok)); }
+
 export async function stopTracking(reason = "stopped") {
+  const ending = trip || (await getTrip());
+  if (ending && reason === "ended") await storage.setJSON(rideKey(ending.token), { startedAt: ending.startedAt, endedAt: new Date().toISOString() });
   fgSub?.remove();
   fgSub = null;
   try { await deactivateKeepAwake("dockclock"); } catch {}

@@ -68,5 +68,10 @@ End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads 
 - Tested: iteration_9 all pass.
 - Port to the web app project (naughty-hugle-13) so it matches: /api/open landing page + web /d redirect, honoring ping ts for offline points, driver email + schedules, reset-test.
 
+## 2026-06 — Round 6
+- Ride flow per the owner's spec: Start ride → main trip timer (persisted per load, survives reopen). Auto zone entry from the server geofence shows an "In zone for" timer until auto exit. No manual arrive/leave buttons. End ride (confirm) ends the timer and tracking; Restart link if ended by mistake. Haptic + toast on zone enter/exit.
+- Tested: iteration_10 all pass; wording fixes and restart link added after.
+
+
 
 
