@@ -19,7 +19,7 @@ import templates  # noqa: E402
 import emailer  # noqa: E402
 
 BASE_URL = (os.environ.get("EXPO_PUBLIC_BACKEND_URL") or os.environ.get("EXPO_BACKEND_URL")).rstrip("/")
-DEMO_TOKEN = "c6f13b08450947f7a4d7d1b94f340178d05b9070"
+DEMO_TOKEN = (__import__("pymongo").MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]].loads.find_one({"load_number": "APX-30277"}) or {}).get("driver_token", "")  # APX-30277 (tokens regenerate on reseed)
 FLEET_ID = "demo-dockclock-fleet"
 TAG = uuid.uuid4().hex[:6]
 TEST_EMAIL = f"delivered+dc{TAG}@resend.dev"

@@ -109,7 +109,7 @@ def driver_link_email(fleet_name, driver_name, load_number, facility, url):
     inner = (f'<p style="font-size:15px;line-height:1.6">{hi} your load <strong>{escape(load_number)}</strong>'
              f'{" to " + escape(facility) if facility else ""} is ready in the DockClock Driver app.</p>'
              '<p style="font-size:15px;line-height:1.6">Open this email on your phone, tap the button, then press '
-             '<strong>Start trip</strong>. Your dock arrival and departure are stamped automatically until delivery.</p>'
+             '<strong>Start ride</strong>. Your time in each stop\'s zone is recorded automatically until you tap End ride.</p>'
              + _btn(url, "Open in DockClock Driver")
              + '<p style="font-size:13px;color:#64748b">Don\'t have the app yet? The button shows you how to install it.</p>')
     return title, _wrap(title, inner, fleet_name)
@@ -134,7 +134,7 @@ def driver_recap_email(fleet_name, driver_name, period_label, rows):
 
 
 def driver_open_page(valid: bool, load_number: str, driver_name: str, deep_link: str, intent_link: str,
-                     ios_url: str, android_url: str) -> str:
+                     ios_url: str, android_url: str, expo_go_link: str = "", auto_open: bool = True) -> str:
     """Landing page for the texted driver link: opens the DockClock Driver app or shows install steps."""
     css = (
         "*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;"
@@ -169,15 +169,22 @@ def driver_open_page(valid: bool, load_number: str, driver_name: str, deep_link:
     js = ("<script>var deep=" + json.dumps(deep_link) + ",intent=" + json.dumps(intent_link) + ";"
           "var a=/android/i.test(navigator.userAgent);var href=a?intent:deep;"
           "document.getElementById('open-btn').href=href;"
-          "setTimeout(function(){window.location.href=href},300);</script>")
+          + ("setTimeout(function(){window.location.href=href},300);" if auto_open else "")
+          + "</script>")
+    expo = ""
+    if expo_go_link:
+        expo = ('<div class="warn" data-testid="open-expo-go-box"><b>Testing the preview?</b> The app isn\'t installed '
+                'yet, so use Expo Go instead.'
+                f'<a class="btn sec" data-testid="open-expo-go-button" href="{escape(expo_go_link)}">Open in Expo Go</a></div>')
     hi = f"Hi {escape(driver_name)} — " if driver_name else ""
     return head + (
         f'<h1 data-testid="open-title">Open your load in the app</h1>'
-        f'<p>{hi}tap the button to open load <b>{escape(load_number)}</b> in the DockClock Driver app, then press <b>Start trip</b>.</p>'
+        f'<p>{hi}tap the button to open load <b>{escape(load_number)}</b> in the DockClock Driver app, then press <b>Start ride</b>.</p>'
         f'<a id="open-btn" class="btn pri" data-testid="open-app-button" href="{escape(deep_link)}">Open DockClock Driver</a>'
+        f'{expo}'
         '<div class="card" data-testid="open-install-steps"><div class="k">Don\'t have the app yet?</div>'
         '<h2>Install DockClock Driver</h2><ol>'
         f'<li>Install the free DockClock Driver app{" using the button below" if (ios_url or android_url) else " (your dispatcher sends the install link)"}.</li>'
         '<li>Open it once and allow location (keep <b>Precise</b> on).</li>'
-        '<li>Come back to this text and tap the link again — your load opens automatically.</li></ol></div>'
+        '<li>Come back to this email and tap the link again — your load opens automatically.</li></ol></div>'
         f'{stores}</main>{js}</body></html>')

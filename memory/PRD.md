@@ -73,5 +73,12 @@ End-to-end demo seeded by backend/demo.py, owned by abdowns4@gmail.com. 6 loads 
 - Tested: iteration_10 all pass; wording fixes and restart link added after.
 
 
+## 2026-06 — Round 7
+- Expo Go has no "Always" location (sandbox limitation). The app detects Expo Go, skips the background request and shows a note. The real build has background location.
+- The emailed link page now has an "Open in Expo Go" button (backend env DRIVER_APP_EXPO_GO_URL). The Android intent falls back to the page (?noapp=1) instead of showing "app can't be found".
+- No git remote is configured in the workspace, so there was nothing to pull.
+- Tested: iteration_11 (63 backend tests, web checks pass).
+
+
 
 

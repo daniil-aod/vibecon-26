@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import Lucide from "@react-native-vector-icons/lucide";
@@ -21,6 +22,8 @@ import { clock, dist, fmtClock, hrs } from "@/src/lib/format";
 import { colors, fonts, radius, spacing } from "@/src/theme";
 
 const isIOS = Platform.OS === "ios";
+// Expo Go can't track in the background (its own permissions have no "Always"); a real build can.
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 function useNow(ms = 1000) {
   const [n, setN] = useState(Date.now());
@@ -143,7 +146,7 @@ export default function DriverScreen() {
       if (iss || !perm) return;
       setPreciseOff(!(await ensurePrecise(perm)));
       const bg = await backgroundState();
-      if (!bg.granted && bg.canAsk && Platform.OS !== "web") { setBgSheet(true); return; }
+      if (!bg.granted && bg.canAsk && Platform.OS !== "web" && !isExpoGo) { setBgSheet(true); return; }
       await begin();
     } catch (e) { toast.error(errMsg(e, L.startFail)); } finally { setBusy(""); }
   };
@@ -284,8 +287,14 @@ export default function DriverScreen() {
         {!issue && bgDenied && tracking && mode === "foreground" && (
           <View style={styles.px} testID="driver-background-limited">
             <View style={styles.infoCard}>
-              <Text style={styles.infoT}>{L.bgLimited1}<Text style={styles.b}>{isIOS ? L.always : L.allTheTime}</Text>.</Text>
-              <Pressable testID="driver-background-settings-link" onPress={() => Linking.openSettings()} hitSlop={8}><Text style={styles.link}>{L.openSettings}</Text></Pressable>
+              {isExpoGo ? (
+                <Text style={styles.infoT} testID="driver-expo-go-note">{L.expoGoNote}</Text>
+              ) : (
+                <>
+                  <Text style={styles.infoT}>{L.bgLimited1}<Text style={styles.b}>{isIOS ? L.always : L.allTheTime}</Text>.</Text>
+                  <Pressable testID="driver-background-settings-link" onPress={() => Linking.openSettings()} hitSlop={8}><Text style={styles.link}>{L.openSettings}</Text></Pressable>
+                </>
+              )}
             </View>
           </View>
         )}

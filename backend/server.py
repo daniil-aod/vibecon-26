@@ -1062,10 +1062,16 @@ async def driver_open(tok: str, request: Request):
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
     origin = f"https://{host}" if host else ""
     deep = f"dockclock://d/{tok}?api={quote(origin, safe='')}"
-    intent = f"intent://d/{tok}?api={quote(origin, safe='')}#Intent;scheme=dockclock;end"
+    page_url = f"{origin}/api/open/{tok}?noapp=1"
+    # Android: if the app isn't installed, Chrome falls back to this page instead of "app can't be found".
+    intent = (f"intent://d/{tok}?api={quote(origin, safe='')}#Intent;scheme=dockclock;"
+              f"S.browser_fallback_url={quote(page_url, safe='')};end")
+    expo_go = os.environ.get("DRIVER_APP_EXPO_GO_URL", "").rstrip("/")
+    expo_go_link = f"{expo_go}/--/d/{tok}?api={quote(origin, safe='')}" if expo_go else ""
     ios_url = os.environ.get("DRIVER_APP_IOS_URL", "")
     android_url = os.environ.get("DRIVER_APP_ANDROID_URL", "")
     return HTMLResponse(templates.driver_open_page(
+        expo_go_link=expo_go_link, auto_open=request.query_params.get("noapp") != "1",
         valid=bool(load), load_number=(load or {}).get("load_number") or "",
         driver_name=((load or {}).get("driver") or {}).get("name") or "",
         deep_link=deep, intent_link=intent, ios_url=ios_url, android_url=android_url),

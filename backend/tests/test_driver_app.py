@@ -7,13 +7,23 @@ from motor.motor_asyncio import AsyncIOMotorClient
 load_dotenv("/app/backend/.env")
 load_dotenv("/app/frontend/.env")
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL").rstrip("/")
-ON_SITE_TOKEN = "b8dbdcc3c583433bb0183c525f4ab4f52d74b231"  # RL-55018
-COMPLETED_TOKEN = "c6f13b08450947f7a4d7d1b94f340178d05b9070"  # APX-30277
 JPEG = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffd9")
 
 
 def _db():
     return AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+
+
+def _token_for(load_number):
+    """Demo tokens are regenerated on reseed, so look them up by load number."""
+    async def q():
+        ld = await _db().loads.find_one({"load_number": load_number}, {"_id": 0, "driver_token": 1})
+        return (ld or {}).get("driver_token", "")
+    return asyncio.run(q())
+
+
+ON_SITE_TOKEN = _token_for("RL-55018")
+COMPLETED_TOKEN = _token_for("APX-30277")
 
 
 def run(coro):
