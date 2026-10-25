@@ -1697,7 +1697,7 @@ async def dashboard(m: dict = Depends(fleet_member)):
         if i["status"] == "ready":
             attention.append({"kind": "invoice_ready", "invoice_id": i["id"], "load_id": i["load_id"],
                               "load_number": i.get("load_number"), "facility_name": i.get("facility_name"), "amount": i["amount"]})
-    outstanding = round(sum(i["amount"] for i in invs if i["status"] == "sent"), 2)
+    outstanding = round(sum(i["amount"] for i in invs if i["status"] in ("sent", "issued")), 2)
     recovered = round(sum(i.get("paid_amount") or i["amount"] for i in invs if i["status"] == "paid"), 2)
     facilities = await db.facilities.find({"fleet_id": fleet["id"], "lat": {"$ne": None}}, {"_id": 0}).to_list(500)
     return {"headline": headline(last), "last_week": last, "this_week": this, "this_week_headline": headline(this, "This week"),
@@ -1819,7 +1819,7 @@ async def run_weekly(fleet, force=False):
     to = (owner or {}).get("email") or fleet.get("reply_to_email")
     if not to or not fleet.get("app_url"):
         return False
-    outstanding = sum(i["amount"] for i in await db.invoices.find({"fleet_id": fleet["id"], "status": "sent"}, {"_id": 0}).to_list(2000))
+    outstanding = sum(i["amount"] for i in await db.invoices.find({"fleet_id": fleet["id"], "status": {"$in": ["sent", "issued"]}}, {"_id": 0}).to_list(2000))
     subj, html = templates.weekly_email(fleet["name"], headline(s), fleet["app_url"] + "/app", [
         ("Hours detained", f"{s['detained_hours']:g}"), ("Loads detained", s["detained_loads"]),
         ("Billable under rate cons", f"${s['billable']:,.2f}"), ("Invoices ready to send", s["ready_invoices"]),

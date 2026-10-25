@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 14: frontend-only checks of the web dashboard in live email mode (BILLING_SUBMISSION_MODE=live). I signed in as the Clerk QA user (TEST_QA Haulers) and checked the Dashboard, Loads list (27 rows), two completed loads (TEST-UIM-7c177f with a draft v1 packet that is blocked, and TEST-MAIN-fbd5b8 with an issued v1 packet and a simulated submission), the Invoices page (Ready tab 6 rows, Sent tab 48 rows) and the DC-1021 invoice drawer. Nothing crashed and no console errors or page errors were seen on any page. The Outstanding KPI ($4,163, API 4162.5) equals the sum of sent invoices from GET /api/invoices. However, two of the claimed changes are NOT in the code: server.py still filters on status == 'sent' only (lines 1700 and 1822), and no 'Emailed' wording change exists in the web app. I triggered no submissions or sends and ran no backend pytest.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/dashboard (server.py:1700) and the weekly summary (server.py:1822)", "issue": "The review request says the KPI now uses status in ('sent','issued'), but the code still reads `i['status'] == 'sent'`. This is harmless today because invoices never get status 'issued' ('issued' is a packet status). DB invoice statuses are credit, disputed, paid, ready and sent. The fix was either not saved or not needed. The KPI value is currently correct."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LoadDetail finalizeMsg (LoadDetail.js:28)", "issue": "The toast is hardcoded to 'Invoice submitted to the billing contact (simulated in test mode)' even when the server is in live mode. It should depend on billing.submission_mode or the simulated flag in the response.", "selector": "load-send-invoice-*", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Invoice detail drawer / Load detail", "issues": [
+        "The review request says email actions show the generic word 'Emailed', but there is no such change in the code. The history renders the raw action in lowercase: 'emailed → ap@example.test' (Invoices.js:128). It does not say 'emailed to broker', but it is not capitalised 'Emailed' either.",
+        "The history list does not show h.note, so legacy entries marked 'SIMULATED - no email sent' look like real emails now that the server is in live mode.",
+        "The drawer 'Broker' row shows delivered@resend.dev while the history shows the email went to ap@example.test. Consider 'Billed to' plus the actual recipient.",
+        "'emailed to broker' toasts are still present: Invoices.js:48 'Invoice sealed and emailed to broker', Dashboard.js:36 'Invoice emailed to broker', LoadDetail.js:28 fallback. The Invoices.js:80 menu item reads 'Re-send to broker'."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Make the LoadDetail finalizeMsg toast mode-aware and drop '(simulated in test mode)' when live and not a demo fleet",
+    "Apply the intended 'Emailed' wording: capitalise the history action label and replace the 'emailed to broker' toasts in Invoices.js:48, Dashboard.js:36 and LoadDetail.js:28",
+    "Render h.note (e.g. SIMULATED) in the invoice history",
+    "Either apply ('sent','issued') at server.py:1700/1822 as described or confirm it is unnecessary, since invoices never have status 'issued'"
+  ],
+  "critical_code_review_comments": [
+    "The review request does not match the code: neither the KPI 'issued' change nor the 'Emailed' wording change is in the codebase. git status is clean apart from .emergent files.",
+    "finalize.enqueue sets simulated = SUBMISSION_MODE != 'live' or fleet.is_demo. This is present and correct."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend only by request)", "frontend": "~85% - all pages render with no console errors and the KPI is correct; the wording change and mode-aware toast are missing"},
+  "seed_data_creation": "None. Used existing QA fleet loads 9d296dbd (TEST-UIM-7c177f) and 76ec3792 (TEST-MAIN-fbd5b8) and invoice DC-1021.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Live email mode with a 429 rate limit: do not click Send, Bill via packet or Confirm · send automatically. UI sign-in: python /app/tests/clerk_helper.py dockqa+clerk_test@example.com -> /sign-in?__clerk_ticket=<TICKET> (single use, mint one per browser run). The invoice drawer opens by clicking the number button inside invoice-row-<id>, not the row itself."
+}

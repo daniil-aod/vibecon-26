@@ -45,7 +45,7 @@ export default function Invoices() {
 
   const run = async (fn, ok) => { try { const r = await fn(); if (ok) toast.success(ok); await load(); if (detail) setDetail(r?.data || null); } catch (e) { toast.error(errMsg(e)); } };
   const status = (inv, action, ok, extra = {}) => run(() => api.post(`/invoices/${inv.id}/status`, { action, ...extra }), ok);
-  const send = (inv) => run(() => api.post(`/invoices/${inv.id}/send`), inv.status === "ready" ? "Invoice sealed and emailed to broker" : "Invoice re-sent");
+  const send = (inv) => run(() => api.post(`/invoices/${inv.id}/send`), inv.status === "ready" ? "Invoice sealed and emailed" : "Invoice re-sent");
   const pdf = async (inv) => { try { const r = await api.get(`/invoices/${inv.id}/pdf`, { responseType: "blob" }); window.open(URL.createObjectURL(r.data), "_blank"); } catch (e) { toast.error(errMsg(e)); } };
   const openDetail = async (inv) => { try { setDetail((await api.get(`/invoices/${inv.id}`)).data); } catch (e) { toast.error(errMsg(e)); } };
 
@@ -77,7 +77,7 @@ export default function Invoices() {
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild><Button data-testid={`invoice-actions-${inv.id}`} size="icon" variant="ghost"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-52">
-                      {inv.status === "sent" && !inv.packet_id && <DropdownMenuItem data-testid="invoice-action-resend" onClick={() => send(inv)}><Send className="mr-2 h-4 w-4" />Re-send to broker</DropdownMenuItem>}
+                      {inv.status === "sent" && !inv.packet_id && <DropdownMenuItem data-testid="invoice-action-resend" onClick={() => send(inv)}><Send className="mr-2 h-4 w-4" />Re-send invoice</DropdownMenuItem>}
                       {inv.status !== "ready" && <DropdownMenuItem asChild><a href={inv.evidence_url} target="_blank" rel="noreferrer" data-testid="invoice-action-evidence"><ExternalLink className="mr-2 h-4 w-4" />Open evidence page</a></DropdownMenuItem>}
                       <DropdownMenuItem data-testid="invoice-action-pdf" onClick={() => pdf(inv)}><FileDown className="mr-2 h-4 w-4" />Preview PDF packet</DropdownMenuItem>
                       <DropdownMenuSeparator />
@@ -125,7 +125,7 @@ export default function Invoices() {
                 <div className="space-y-1.5">{detail.reminder_plan.map((r) => (
                   <div key={r.day} className="flex justify-between rounded-lg border px-3 py-2"><span>{r.label ? `${r.label} · day ${r.day}` : `Day ${r.day}`}</span><span className="font-mono text-xs">{r.sent ? `sent ${fmtTime(r.sent_at, tz)}` : r.due_at ? `due ${fmtTime(r.due_at, tz)}` : "starts when sent"}</span></div>))}</div></div>
               <div><div className="mb-2 font-medium">History</div>
-                <ol className="space-y-1 font-mono text-xs text-muted-foreground">{(detail.history || []).map((h, i) => <li key={i}>{fmtTime(h.at, tz)} · {h.action.replace(/_/g, " ")}{h.to ? ` → ${h.to}` : ""}</li>)}
+                <ol className="space-y-1 font-mono text-xs text-muted-foreground">{(detail.history || []).map((h, i) => <li key={i}>{fmtTime(h.at, tz)} · {h.action.charAt(0).toUpperCase() + h.action.slice(1).replace(/_/g, " ")}{h.to ? ` → ${h.to}` : ""}{h.note ? ` (${h.note})` : ""}</li>)}
                   {!(detail.history || []).length && <li>Not sent yet.</li>}</ol></div>
             </div>
           </>}
